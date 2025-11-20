@@ -14,20 +14,46 @@ struct IRConverterStmtListInternal {
 	int version{};
 };
 
+struct IRConverterStmtInternal {
+	std::unique_ptr<SimplestStmt> stmt;
+	// todo
+	std::string last_error;
+	// todo
+	int version{};
+};
+
 extern "C" {
-IRConverterStmtList ConvertNodeStrToIR_C(const char *nodestr_file_name) {
+IRConverterStmtList ConvertNodeStrToIRFromFile_C(const char *nodestr_file_name) {
 	if (!nodestr_file_name) {
 		return nullptr;
 	}
 
 	try {
 		std::string filename(nodestr_file_name);
-		auto stmts = ConvertNodeStrToIR(filename);
+		auto stmts = ConvertNodeStrToIRFromFile(filename);
 
 		auto *internal = new IRConverterStmtListInternal();
 		internal->stmts = std::move(stmts);
 
 		return static_cast<IRConverterStmtList>(internal);
+	} catch (...) {
+		return nullptr;
+	}
+}
+
+IRConverterStmt ConvertNodeStrToIR_C(const char *nodestr, size_t query_id) {
+	if (!nodestr) {
+		return nullptr;
+	}
+
+	try {
+		std::string nodestr_str(nodestr);
+		auto stmt = ConvertNodeStrToIR(nodestr_str, query_id);
+
+		auto *internal = new IRConverterStmtInternal();
+		internal->stmt = std::move(stmt);
+
+		return static_cast<IRConverterStmt>(internal);
 	} catch (...) {
 		return nullptr;
 	}
@@ -42,7 +68,7 @@ size_t StmtListSize(IRConverterStmtList list) {
 	return internal->stmts.size();
 }
 
-IRConverterStmt GetStmtFromList(IRConverterStmtList list, size_t index) {
+IRConverterStmt GetRawStmtFromList(IRConverterStmtList list, size_t index) {
 	if (!list) {
 		return nullptr;
 	}
@@ -54,6 +80,15 @@ IRConverterStmt GetStmtFromList(IRConverterStmtList list, size_t index) {
 	}
 
 	return static_cast<IRConverterStmt>(internal->stmts[index].get());
+}
+
+IRConverterStmt GetRawStmt(IRConverterStmt stmt) {
+	if (!stmt) {
+		return nullptr;
+	}
+
+	auto *internal = static_cast<IRConverterStmtInternal*>(stmt);
+	return static_cast<IRConverterStmt>(internal->stmt.get());
 }
 
 char *ConvertIRToSQL_C(IRConverterStmt stmt, int query_id, int save_file, const char *sql_path) {
@@ -83,6 +118,14 @@ void FreeStmtList(IRConverterStmtList list) {
 		return;
 	}
 	auto *internal = static_cast<IRConverterStmtListInternal *>(list);
+	delete internal;
+}
+
+void FreeStmt(IRConverterStmt stmt) {
+	if (!stmt) {
+		return;
+	}
+	auto *internal = static_cast<IRConverterStmt *>(stmt);
 	delete internal;
 }
 

@@ -9,15 +9,21 @@ extern "C" {
 	typedef void *IRConverterStmtList;
 	typedef void *IRConverterStmt;
 
-	IRConverterStmtList ConvertNodeStrToIR_C(const char *nodestr_file_name);
+	IRConverterStmtList ConvertNodeStrToIRFromFile_C(const char *nodestr_file_name);
+
+	IRConverterStmt ConvertNodeStrToIR_C(const char *nodestr, size_t query_id);
 
 	size_t StmtListSize(IRConverterStmtList list);
 
-	IRConverterStmt GetStmtFromList(IRConverterStmtList list, size_t index);
+	IRConverterStmt GetRawStmtFromList(IRConverterStmtList list, size_t index);
+
+	IRConverterStmt GetRawStmt(IRConverterStmt stmt);
 
 	char *ConvertIRToSQL_C(IRConverterStmt stmt, int query_id, int save_file, const char *sql_path);
 
 	void FreeStmtList(IRConverterStmtList list);
+
+	void FreeStmt(IRConverterStmt stmt);
 
 	void FreeSQLString(char *str);
 

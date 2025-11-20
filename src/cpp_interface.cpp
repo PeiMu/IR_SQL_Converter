@@ -5,7 +5,7 @@
 
 namespace ir_sql_converter {
 
-	std::vector<std::unique_ptr<SimplestStmt>> ConvertNodeStrToIR(const std::string &nodestr_file_name) {
+	std::vector<std::unique_ptr<SimplestStmt>> ConvertNodeStrToIRFromFile(const std::string &nodestr_file_name) {
 		std::vector<std::unique_ptr<SimplestStmt>> simplest_irs;
 
 		// get the postgres node string
@@ -24,16 +24,22 @@ namespace ir_sql_converter {
 
 		NodestrToIR nodestr_to_ir_converter;
 		for (size_t i = 0; i < subqueries_num; i++) {
-			nodestr_to_ir_converter.Clear();
-			std::unique_ptr<SimplestNode> postgres_plan = nodestr_to_ir_converter.StringToNode(query_string_vec[i].c_str());
-			std::unique_ptr<SimplestStmt> postgres_stmt = unique_ptr_cast<SimplestNode, SimplestStmt>(
-				std::move(postgres_plan));
-			postgres_stmt = nodestr_to_ir_converter.GenerateProjHead(std::move(postgres_stmt), i);
+			std::unique_ptr<SimplestStmt> postgres_stmt = ConvertNodeStrToIR(query_string_vec[i], i);
 
 			simplest_irs.emplace_back(std::move(postgres_stmt));
 		}
 
 		return simplest_irs;
+	}
+
+	std::unique_ptr<SimplestStmt> ConvertNodeStrToIR(const std::string &nodestr, size_t query_id) {
+		NodestrToIR nodestr_to_ir_converter;
+		nodestr_to_ir_converter.Clear();
+		std::unique_ptr<SimplestNode> postgres_plan = nodestr_to_ir_converter.StringToNode(nodestr.c_str());
+		std::unique_ptr<SimplestStmt> postgres_stmt = unique_ptr_cast<SimplestNode, SimplestStmt>(
+			std::move(postgres_plan));
+		postgres_stmt = nodestr_to_ir_converter.GenerateProjHead(std::move(postgres_stmt), query_id);
+		return std::move(postgres_stmt);
 	}
 
 	std::string ConvertIRToSQL(SimplestStmt &simplest_stmt, int query_id, bool save_file,
