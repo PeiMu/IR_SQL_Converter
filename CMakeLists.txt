@@ -48,3 +48,9 @@ add_library(IR_SQL_Converter_C_static STATIC
         src/nodestr_to_ir.cpp
         src/ir_to_sql.cpp)
 target_link_libraries(IR_SQL_Converter_C_static lib_pg_query)
+
+option(BUILD_TESTING "Build the testing tree" ON)
+if(BUILD_TESTING)
+    add_subdirectory(c_test)
+#    add_subdirectory(cpp_test)
+endif()

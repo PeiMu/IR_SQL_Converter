@@ -45,3 +45,7 @@ lib*.pc
 /build/
 .idea/
 /lib/
+/bin/
+/cmake-build-debug
+
+*.sql
