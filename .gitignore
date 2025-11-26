@@ -49,3 +49,5 @@ lib*.pc
 /cmake-build-debug
 
 *.sql
+
+test

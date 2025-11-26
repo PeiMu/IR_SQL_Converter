@@ -156,5 +156,11 @@ namespace ir_sql_converter {
 
 		std::vector<std::unique_ptr<SimplestVarParamComparison>> index_conditions;
 		agg_fn_pair agg_fns;
+
+		void PopulateTableNames(SimplestStmt *stmt);
+
+		void PopulateColumnName(SimplestAttr *attr);
+
+		void PopulateColumnNamesInExpr(SimplestExpr *expr);
 	};
 }

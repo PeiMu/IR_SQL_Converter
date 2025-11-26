@@ -53,6 +53,12 @@ namespace ir_sql_converter {
 		restore_location_fields = save_restore_location_fields;
 #endif
 
+		// Post-process: populate table names in Scan nodes after parsing is complete
+		if (node) {
+			auto &stmt = node->Cast<SimplestStmt>();
+			PopulateTableNames(&stmt);
+		}
+
 		return node;
 	}
 
@@ -422,13 +428,15 @@ namespace ir_sql_converter {
 		if (token == NULL)
 			std::cout << "Error! incomplete Bitmapset structure" << std::endl;
 		if (length != 1 || token[0] != '(')
-			std::cout << "Error! unrecognized token: (" + std::to_string(length) + ")\"" + token + "\" in ReadBitmapset" << std::endl;
+			std::cout << "Error! unrecognized token: (" + std::to_string(length) + ")\"" + token + "\" in ReadBitmapset"
+			          << std::endl;
 
 		token = PG_strtok(&length);
 		if (token == NULL)
 			std::cout << "Error! incomplete Bitmapset structure" << std::endl;
 		if (length != 1 || token[0] != 'b')
-			std::cout << "Error! unrecognized token: (" + std::to_string(length) + ")\"" + token + "\" in ReadBitmapset" << std::endl;
+			std::cout << "Error! unrecognized token: (" + std::to_string(length) + ")\"" + token + "\" in ReadBitmapset"
+			          << std::endl;
 
 		for (;;) {
 			int val;
@@ -442,7 +450,7 @@ namespace ir_sql_converter {
 			val = (int) strtol(token, &endptr, 10);
 			if (endptr != token + length)
 				std::cout << "Error! unrecognized integer: (" + std::to_string(length) + ")\"" + token +
-				               "\" in ReadBitmapset" << std::endl;
+				             "\" in ReadBitmapset" << std::endl;
 			//		result = bms_add_member(result, val);
 		}
 
@@ -581,7 +589,7 @@ namespace ir_sql_converter {
 			agg_type_vec.emplace_back(target->GetType());
 		}
 		std::unique_ptr<SimplestAggregate> agg_stmt = std::make_unique<SimplestAggregate>(std::move(common_stmt),
-		                                                                           std::move(agg_fns));
+		                                                                                  std::move(agg_fns));
 
 		// AggStrategy
 		token = PG_strtok(&length);
@@ -906,7 +914,8 @@ namespace ir_sql_converter {
 		token = PG_strtok(&length);
 		token = PG_strtok(&length);
 
-		std::unique_ptr<SimplestHash> hash_stmt = std::make_unique<SimplestHash>(std::move(common_plan), std::move(hash_keys));
+		std::unique_ptr<SimplestHash> hash_stmt = std::make_unique<SimplestHash>(std::move(common_plan),
+		                                                                         std::move(hash_keys));
 
 		return hash_stmt;
 	}
@@ -1278,8 +1287,8 @@ namespace ir_sql_converter {
 				unique_ptr_cast<SimplestVar, SimplestParam>(std::move(var_vec[1])));
 		} else {
 			return std::make_unique<SimplestVarComparison>(op_type,
-			                                        unique_ptr_cast<SimplestVar, SimplestAttr>(std::move(var_vec[0])),
-			                                        unique_ptr_cast<SimplestVar, SimplestAttr>(std::move(var_vec[1])));
+			                                               unique_ptr_cast<SimplestVar, SimplestAttr>(std::move(var_vec[0])),
+			                                               unique_ptr_cast<SimplestVar, SimplestAttr>(std::move(var_vec[1])));
 		}
 	}
 
@@ -1308,7 +1317,7 @@ namespace ir_sql_converter {
 		std::vector<std::unique_ptr<SimplestExpr>> expr_vec;
 		NodeRead(NULL, 0, true, &node_vec);
 		assert((LogicalNot == logical_op && node_vec.size() == 1) ||
-		         ((LogicalAnd == logical_op || LogicalOr == logical_op) && node_vec.size() == 2));
+		       ((LogicalAnd == logical_op || LogicalOr == logical_op) && node_vec.size() == 2));
 		for (auto &node: node_vec) {
 			if (node)
 				expr_vec.emplace_back(unique_ptr_cast<SimplestNode, SimplestExpr>(std::move(node)));
@@ -1393,8 +1402,8 @@ namespace ir_sql_converter {
 				unique_ptr_cast<SimplestVar, SimplestConstVar>(std::move(var_vec[1])));
 		} else {
 			return std::make_unique<SimplestVarComparison>(op_type,
-			                                        unique_ptr_cast<SimplestVar, SimplestAttr>(std::move(var_vec[0])),
-			                                        unique_ptr_cast<SimplestVar, SimplestAttr>(std::move(var_vec[1])));
+			                                               unique_ptr_cast<SimplestVar, SimplestAttr>(std::move(var_vec[0])),
+			                                               unique_ptr_cast<SimplestVar, SimplestAttr>(std::move(var_vec[1])));
 		}
 	}
 
@@ -1837,7 +1846,7 @@ namespace ir_sql_converter {
 		if (token == NULL || token[0] != '[') {
 			std::string token_str = token ? token : "[NULL]";
 			std::cout << "Error! expected \"[\" to start datum, but got " + token_str +
-			               "; length = " + std::to_string(datum_len) << std::endl;
+			             "; length = " + std::to_string(datum_len) << std::endl;
 		}
 
 		if (typbyval) {
@@ -1865,7 +1874,7 @@ namespace ir_sql_converter {
 		if (token == NULL || token[0] != ']') {
 			std::string token_str = token ? token : "[NULL]";
 			std::cout << "Error! expected \"]\" to end datum, but got " + token_str +
-			               "; length = " + std::to_string(datum_len) << std::endl;
+			             "; length = " + std::to_string(datum_len) << std::endl;
 		}
 
 		return res;
@@ -2107,7 +2116,7 @@ namespace ir_sql_converter {
 		std::vector<std::unique_ptr<SimplestAttr>> target_list;
 		for (const auto &target: postgres_stmt->target_list) {
 			auto simplest_target = std::make_unique<SimplestAttr>(target->GetType(), target->GetTableIndex(),
-			                                               target->GetColumnIndex(), target->GetColumnName());
+			                                                      target->GetColumnIndex(), target->GetColumnName());
 			target_list.emplace_back(std::move(simplest_target));
 		}
 
@@ -2120,4 +2129,124 @@ namespace ir_sql_converter {
 
 		return unique_ptr_cast<SimplestStmt, SimplestProjection>(std::move(simplest_projection));
 	}
+
+	void NodestrToIR::PopulateTableNames(SimplestStmt *stmt) {
+		if (!stmt)
+			return;
+
+		for (auto &attr: stmt->target_list) {
+			PopulateColumnName(attr.get());
+		}
+
+		for (auto &qual: stmt->qual_vec) {
+			PopulateColumnNamesInExpr(qual.get());
+		}
+
+		for (auto &child: stmt->children) {
+			if (child)
+				PopulateTableNames(child.get());
+		}
+
+		if (SimplestNodeType::JoinNode == stmt->GetNodeType()) {
+			auto &join_node = stmt->Cast<SimplestJoin>();
+			for (auto &join_cond: join_node.join_conditions) {
+				PopulateColumnName(join_cond->left_attr.get());
+				PopulateColumnName(join_cond->right_attr.get());
+			}
+		} else if (SimplestNodeType::HashNode == stmt->GetNodeType()) {
+			auto &hash_node = stmt->Cast<SimplestHash>();
+			for (auto &hash_key: hash_node.hash_keys) {
+				PopulateColumnName(hash_key.get());
+			}
+		} else if (SimplestNodeType::ScanNode == stmt->GetNodeType()) {
+			auto &scan_node = stmt->Cast<SimplestScan>();
+			auto table_index = scan_node.GetTableIndex();
+
+			// table_index is 1-based, table_col_names is 0-based
+			if (table_index > 0 && table_index <= table_col_names.size()) {
+				const auto &table_entry = table_col_names[table_index - 1];
+				if (!table_entry.empty()) {
+					std::string table_name = table_entry.begin()->first;
+					scan_node.SetTableName(table_name);
+				}
+			}
+		} else if (SimplestNodeType::AggregateNode == stmt->GetNodeType()) {
+			auto &agg_node = stmt->Cast<SimplestAggregate>();
+			for (auto &agg_fn: agg_node.agg_fns) {
+				PopulateColumnName(agg_fn.first.get());
+			}
+			for (auto &group: agg_node.groups) {
+				PopulateColumnName(group.get());
+			}
+		}
+	}
+
+	void NodestrToIR::PopulateColumnName(SimplestAttr *attr) {
+		if (!attr)
+			return;
+
+		auto table_index = attr->GetTableIndex();
+		auto column_index = attr->GetColumnIndex();
+
+		// table_index is 1-based, table_col_names is 0-based
+		// column_index is 1-based for varoattno
+		if (table_index > 0 && table_index <= table_col_names.size()) {
+			const auto &table_entry = table_col_names[table_index - 1];
+			if (!table_entry.empty()) {
+				const auto &col_names = table_entry.begin()->second;
+				if (column_index > 0 && column_index <= col_names.size()) {
+					std::string col_name = col_names[column_index - 1]->GetLiteralValue();
+					attr->SetColumnName(col_name);
+				}
+			}
+		}
+	}
+
+	void NodestrToIR::PopulateColumnNamesInExpr(SimplestExpr *expr) {
+		if (!expr)
+			return;
+
+		switch (expr->GetNodeType()) {
+			case SimplestNodeType::VarComparisonNode: {
+				auto &var_comp = expr->Cast<SimplestVarComparison>();
+				PopulateColumnName(var_comp.left_attr.get());
+				PopulateColumnName(var_comp.right_attr.get());
+				break;
+			}
+			case SimplestNodeType::VarConstComparisonNode: {
+				auto &var_const_comp = expr->Cast<SimplestVarConstComparison>();
+				PopulateColumnName(var_const_comp.attr.get());
+				break;
+			}
+			case SimplestNodeType::VarParamComparisonNode: {
+				auto &var_param_comp = expr->Cast<SimplestVarParamComparison>();
+				PopulateColumnName(var_param_comp.attr.get());
+				break;
+			}
+			case SimplestNodeType::IsNullExprNode: {
+				auto &is_null_expr = expr->Cast<SimplestIsNullExpr>();
+				PopulateColumnName(is_null_expr.attr.get());
+				break;
+			}
+			case SimplestNodeType::LogicalExprNode: {
+				auto &logical_expr = expr->Cast<SimplestLogicalExpr>();
+				if (logical_expr.left_expr) {
+					PopulateColumnNamesInExpr(logical_expr.left_expr.get());
+				}
+				if (logical_expr.right_expr) {
+					PopulateColumnNamesInExpr(logical_expr.right_expr.get());
+				}
+				break;
+			}
+			case SimplestNodeType::SingleAttrExprNode: {
+				auto &single_attr_expr = expr->Cast<SimplestSingleAttrExpr>();
+				PopulateColumnName(single_attr_expr.attr.get());
+				break;
+			}
+			default:
+				std::cout << "Doesn't support node type: " + std::to_string(expr->GetNodeType()) << "yet!" << std::endl;
+				assert(false);
+		}
+	}
+
 }
