@@ -1317,7 +1317,7 @@ namespace ir_sql_converter {
 		std::vector<std::unique_ptr<SimplestExpr>> expr_vec;
 		NodeRead(NULL, 0, true, &node_vec);
 		assert((LogicalNot == logical_op && node_vec.size() == 1) ||
-		       ((LogicalAnd == logical_op || LogicalOr == logical_op) && node_vec.size() == 2));
+			   ((LogicalAnd == logical_op || LogicalOr == logical_op) && node_vec.size() > 1));
 		for (auto &node: node_vec) {
 			if (node)
 				expr_vec.emplace_back(unique_ptr_cast<SimplestNode, SimplestExpr>(std::move(node)));
@@ -1330,7 +1330,12 @@ namespace ir_sql_converter {
 		if (LogicalNot == logical_op) {
 			return std::make_unique<SimplestLogicalExpr>(logical_op, nullptr, std::move(expr_vec[0]));
 		} else {
-			return std::make_unique<SimplestLogicalExpr>(logical_op, std::move(expr_vec[0]), std::move(expr_vec[1]));
+			auto temp_expr = std::make_unique<SimplestLogicalExpr>(logical_op, std::move(expr_vec[0]), std::move(expr_vec[1]));
+			size_t node_vec_size = node_vec.size();
+			for (size_t i = 2; i < node_vec_size; i++) {
+				temp_expr = std::make_unique<SimplestLogicalExpr>(logical_op, std::move(temp_expr), std::move(expr_vec[i]));
+			}
+			return temp_expr;
 		}
 	}
 
@@ -2019,6 +2024,7 @@ namespace ir_sql_converter {
 		SimplestAggFnType simplest_agg_fn_type = SimplestAggFnType::InvalidAggType;
 		switch (aggfnoid) {
 			case 2145:
+			case 2132:
 				simplest_agg_fn_type = SimplestAggFnType::Min;
 				break;
 			case 2129:

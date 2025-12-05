@@ -364,6 +364,9 @@ namespace ir_sql_converter {
 			}
 			case SimplestNodeType::HashNode:
 			case SimplestNodeType::CrossProductNode:
+			// SortNode in PostgreSQL is a physical node, and no information for generating SQL
+			// fixme: need to check if PostgreSQL's order by use Sort or Order
+			case SimplestNodeType::SortNode:
 				break;
 			default:
 				std::cout << "Do not support yet, op->type: " + std::to_string(op.GetNodeType()) << std::endl;
