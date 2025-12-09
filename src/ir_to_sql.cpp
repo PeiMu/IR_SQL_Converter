@@ -14,9 +14,9 @@ namespace ir_sql_converter {
 		//	sql_code += "PRAGMA disable_convert_ir_to_sql;\n";
 
 		sql_code += "SELECT ";
-		for (auto select: select_field) {
-			select += ", ";
+		for (const auto &select: select_field) {
 			sql_code += select;
+			sql_code += ", ";
 		}
 		if (!select_field.empty())
 			sql_code.erase(sql_code.size() - 2);
@@ -31,34 +31,34 @@ namespace ir_sql_converter {
 			sql_code.erase(sql_code.size() - 2);
 
 		sql_code += "\nWHERE ";
-		for (auto filter: filter_field) {
-			filter += " AND ";
+		for (const auto &filter: filter_field) {
 			sql_code += filter;
+			sql_code += " AND ";
 		}
 		if (!filter_field.empty() && join_field.empty())
 			sql_code.erase(sql_code.size() - 5);
 
-		for (auto join: join_field) {
-			join += " AND ";
+		for (const auto &join: join_field) {
 			sql_code += join;
+			sql_code += " AND ";
 		}
 		if (!join_field.empty())
 			sql_code.erase(sql_code.size() - 5);
 
 		if (!group_by_field.empty()) {
 			sql_code += "\nGROUP BY\n";
-			for (auto group: group_by_field) {
-				group += ",\n";
+			for (const auto &group: group_by_field) {
 				sql_code += group;
+				sql_code += ",\n";
 			}
 			sql_code.erase(sql_code.size() - 2);
 		}
 
 		if (!order_by_field.empty()) {
 			sql_code += "\nORDER BY\n";
-			for (auto order: order_by_field) {
-				order += ",\n";
+			for (const auto &order: order_by_field) {
 				sql_code += order;
+				sql_code += ",\n";
 			}
 			sql_code.erase(sql_code.size() - 2);
 		}
@@ -89,6 +89,10 @@ namespace ir_sql_converter {
 #ifdef DEBUG
 				assert(!proj_op.target_list.empty());
 #endif
+				// Generate unique alias for this column
+				std::string alias_name;
+				std::string orig_col_name;
+
 				// `SELECT table_name.$target_list`
 				for (size_t idx = 0; idx < proj_op.target_list.size(); idx++) {
 					auto &target = proj_op.target_list[idx];
@@ -111,11 +115,14 @@ namespace ir_sql_converter {
 								proj_table_to_real_table.emplace(
 									std::make_pair(target->GetTableIndex(), target->GetColumnIndex()), table_idx);
 								auto table_name = table_names[table_idx] + "_" + std::to_string(table_idx);
-								std::string orig_col_name = agg_op.agg_fns[agg_fn_index].first->GetColumnName();
+								orig_col_name = agg_op.agg_fns[agg_fn_index].first->GetColumnName();
 								unsigned int col_idx = agg_op.agg_fns[agg_fn_index].first->GetColumnIndex();
 								std::string actual_col_name = GetActualColumnName(table_idx, col_idx, orig_col_name);
 								std::string select_str = table_name + "." + actual_col_name;
 								select_str = agg_fn_type + "(" + select_str + ")";
+								// Generate unique alias: table_name + "_" + column_name
+								alias_name = table_names[table_idx] + "_" + orig_col_name;
+								select_str += " AS " + alias_name;
 								select_field.emplace_back(select_str);
 							} else if (target_table_index == agg_op.GetGroupIndex()) {
 								unsigned int col_idx = target->GetColumnIndex();
@@ -123,9 +130,12 @@ namespace ir_sql_converter {
 								proj_table_to_real_table.emplace(
 									std::make_pair(target->GetTableIndex(), target->GetColumnIndex()), table_idx);
 								auto table_name = table_names[table_idx] + "_" + std::to_string(table_idx);
-								std::string orig_col_name = group_by_vec[col_idx]->GetColumnName();
+								orig_col_name = group_by_vec[col_idx]->GetColumnName();
 								std::string actual_col_name = GetActualColumnName(table_idx, col_idx, orig_col_name);
 								std::string select_str = table_name + "." + actual_col_name;
+								// Generate unique alias: table_name + "_" + column_name
+								alias_name = table_names[table_idx] + "_" + orig_col_name;
+								select_str += " AS " + alias_name;
 								group_by_field.emplace_back(select_str);
 							} else {
 								// todo
@@ -139,7 +149,7 @@ namespace ir_sql_converter {
 					} else {
 						// for the others
 						auto table_name = table_names[target_table_index] + "_" + std::to_string(target_table_index);
-						std::string orig_col_name = target->GetColumnName();
+						orig_col_name = target->GetColumnName();
 						unsigned int col_idx = target->GetColumnIndex();
 						unsigned int table_idx = target->GetTableIndex();
 						std::string actual_col_name = GetActualColumnName(table_idx, col_idx, orig_col_name);
@@ -153,6 +163,9 @@ namespace ir_sql_converter {
 							std::cout << "TODO!" << std::endl;
 							assert(false);
 						}
+						// Generate unique alias: table_name + "_" + column_name
+						alias_name = table_names[target_table_index] + "_" + orig_col_name;
+						select_str += " AS " + alias_name;
 						select_field.emplace_back(select_str);
 					}
 				}
