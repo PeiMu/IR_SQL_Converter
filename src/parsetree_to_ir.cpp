@@ -35,11 +35,12 @@ std::unique_ptr<SimplestStmt> ParseTreeToIR::Convert(const std::string &sql) {
 
   json select_stmt = first_stmt["stmt"]["SelectStmt"];
 
-  return ConvertSelectStmt(select_stmt);
+  return ConvertSelectStmt(select_stmt, 0);
 }
 
 std::unique_ptr<SimplestStmt>
-ParseTreeToIR::ConvertSelectStmt(const json &select_node) {
+ParseTreeToIR::ConvertSelectStmt(const json &select_node,
+                                 unsigned int sub_plan_id) {
   std::cout << select_node.dump(2) << std::endl;
 
   // Convert FROM clause first (builds table index map)
@@ -73,25 +74,20 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node) {
   // Build IR tree
   std::unique_ptr<SimplestStmt> result_tree;
 
-  std::cout << "DEBUG: Extracted " << join_conditions.size()
-            << " join conditions and " << filter_conditions.size()
-            << " filter conditions" << std::endl;
-
   if (from_tree) {
+    result_tree = std::move(from_tree);
     // Check if we have join conditions that need to be applied
     if (!join_conditions.empty()) {
-
-      std::cout << "DEBUG: Creating Join node with " << join_conditions.size()
-                << " conditions" << std::endl;
-
       // SimplestJoin requires exactly 2 children (binary join)
       // We need to extract the children from the CrossProduct tree
       // For a CrossProduct tree, we can split it into left and right subtrees
 
-      if (from_tree->GetNodeType() == SimplestNodeType::CrossProductNode) {
+      if (result_tree->GetNodeType() == SimplestNodeType::CrossProductNode) {
+        //        ConstructCrossProduct();
         // CrossProduct has children - split into left and right for Join
-        auto *cross_product =
-            static_cast<SimplestCrossProduct *>(from_tree.get());
+        auto cross_product =
+            unique_ptr_cast<SimplestStmt, SimplestCrossProduct>(
+                std::move(result_tree));
 
         if (cross_product->children.size() >= 2) {
           // Extract children from CrossProduct
@@ -106,7 +102,7 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node) {
             cp_children.push_back(std::move(cross_product->children[i]));
 
             auto base = std::make_unique<SimplestStmt>(
-                std::move(cp_children), SimplestNodeType::CrossProductNode);
+                std::move(cp_children), SimplestNodeType::StmtNode);
             right_child =
                 std::make_unique<SimplestCrossProduct>(std::move(base));
           }
@@ -124,22 +120,9 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node) {
           result_tree = std::make_unique<SimplestJoin>(
               std::move(base_stmt), std::move(join_conditions),
               SimplestJoinType::Inner);
-          std::cout << "DEBUG: Created Join node, type = "
-                    << static_cast<int>(result_tree->GetNodeType())
-                    << std::endl;
-        } else {
-          // Only one child or no children - just use as-is
-          std::cout << "DEBUG: CrossProduct has < 2 children, using as-is"
-                    << std::endl;
-          result_tree = std::move(from_tree);
         }
       } else {
-        // Not a CrossProduct - just use as-is and join conditions will go to
-        // WHERE
-        std::cout << "DEBUG: from_tree is not CrossProduct (type="
-                  << static_cast<int>(from_tree->GetNodeType())
-                  << "), keeping join conditions for later" << std::endl;
-        result_tree = std::move(from_tree);
+        // Not a CrossProduct
         // Put join conditions back into filter conditions since we can't create
         // a proper Join
         for (auto &jc : join_conditions) {
@@ -147,74 +130,63 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node) {
         }
         join_conditions.clear();
       }
-    } else {
-      result_tree = std::move(from_tree);
     }
 
-    // Set target list on the result tree
-    result_tree->target_list = std::move(target_list);
-    std::cout << "DEBUG: result_tree type before Filter = "
-              << static_cast<int>(result_tree->GetNodeType()) << std::endl;
+    // Add filter conditions (non-join conditions) as Filter node if present
+    if (!filter_conditions.empty()) {
+      // Rebuild filter conditions with AND if we have multiple conditions
+      std::vector<std::unique_ptr<SimplestExpr>> combined_filters;
+
+      if (filter_conditions.size() == 1) {
+        combined_filters.push_back(std::move(filter_conditions[0]));
+      } else {
+        // Chain all filter conditions with AND
+        std::unique_ptr<SimplestExpr> combined =
+            std::move(filter_conditions[0]);
+        for (size_t i = 1; i < filter_conditions.size(); i++) {
+          combined = std::make_unique<SimplestLogicalExpr>(
+              SimplestLogicalOp::LogicalAnd, std::move(combined),
+              std::move(filter_conditions[i]));
+        }
+        combined_filters.push_back(std::move(combined));
+      }
+
+      std::vector<std::unique_ptr<SimplestStmt>> filter_children;
+      filter_children.push_back(std::move(result_tree));
+
+      auto filter_base = std::make_unique<SimplestStmt>(
+          std::move(filter_children),
+          std::vector<std::unique_ptr<SimplestAttr>>(),
+          SimplestNodeType::StmtNode);
+      filter_base->qual_vec = std::move(combined_filters);
+
+      result_tree = std::make_unique<SimplestFilter>(std::move(filter_base));
+    }
+
+    // Create Projection node on top with target_list
+    std::vector<std::unique_ptr<SimplestStmt>> proj_children;
+    proj_children.push_back(std::move(result_tree));
+
+    auto proj_base = std::make_unique<SimplestStmt>(std::move(proj_children),
+                                                    std::move(target_list),
+                                                    SimplestNodeType::StmtNode);
+    auto table_index = UINT_MAX - sub_plan_id;
+    result_tree =
+        std::make_unique<SimplestProjection>(std::move(proj_base), table_index);
   } else {
     // No FROM clause - just a projection
     std::cout << "Warning: No FROM clause - just a projection" << std::endl;
     std::vector<std::unique_ptr<SimplestStmt>> empty_children;
-    result_tree = std::make_unique<SimplestStmt>(
-        std::move(empty_children), std::move(target_list),
-        SimplestNodeType::ProjectionNode);
+    auto proj_base = std::make_unique<SimplestStmt>(std::move(empty_children),
+                                                    std::move(target_list),
+                                                    SimplestNodeType::StmtNode);
+    auto table_index = UINT_MAX - sub_plan_id;
+    result_tree =
+        std::make_unique<SimplestProjection>(std::move(proj_base), table_index);
   }
-
-  // Add filter conditions (non-join conditions) as Filter node if present
-  if (!filter_conditions.empty()) {
-    // Rebuild filter conditions with AND if we have multiple conditions
-    std::vector<std::unique_ptr<SimplestExpr>> combined_filters;
-
-    if (filter_conditions.size() == 1) {
-      combined_filters.push_back(std::move(filter_conditions[0]));
-    } else {
-      // Chain all filter conditions with AND
-      std::unique_ptr<SimplestExpr> combined = std::move(filter_conditions[0]);
-      for (size_t i = 1; i < filter_conditions.size(); i++) {
-        combined = std::make_unique<SimplestLogicalExpr>(
-            SimplestLogicalOp::LogicalAnd, std::move(combined),
-            std::move(filter_conditions[i]));
-      }
-      combined_filters.push_back(std::move(combined));
-    }
-
-    // Create Filter node - the target list should be moved to the outermost
-    // node Save the target list from result_tree before moving it
-    std::vector<std::unique_ptr<SimplestAttr>> saved_target_list =
-        std::move(result_tree->target_list);
-
-    std::vector<std::unique_ptr<SimplestStmt>> filter_children;
-    filter_children.push_back(std::move(result_tree));
-
-    auto filter_base = std::make_unique<SimplestStmt>(
-        std::move(filter_children),
-        std::move(saved_target_list), // Pass the target list to Filter
-        SimplestNodeType::FilterNode);
-    filter_base->qual_vec = std::move(combined_filters);
-
-    result_tree = std::make_unique<SimplestFilter>(std::move(filter_base));
-
-    std::cout << "DEBUG: Created Filter, children.size = "
-              << result_tree->children.size() << std::endl;
-    if (!result_tree->children.empty()) {
-      std::cout << "DEBUG: Filter->children[0] type = "
-                << static_cast<int>(result_tree->children[0]->GetNodeType())
-                << std::endl;
-    }
-  }
-
-  std::cout << "DEBUG: Final result_tree type = "
-            << static_cast<int>(result_tree->GetNodeType()) << std::endl;
 
   // Wrap in SimplestAggregate node if aggregate functions were found
   if (!agg_functions.empty()) {
-    std::cout << "DEBUG: Creating Aggregate node with " << agg_functions.size()
-              << " aggregate functions" << std::endl;
-
     // The target list should be on the Aggregate node, not the child
     std::vector<std::unique_ptr<SimplestAttr>> saved_target_list =
         std::move(result_tree->target_list);
@@ -222,9 +194,9 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node) {
     std::vector<std::unique_ptr<SimplestStmt>> agg_children;
     agg_children.push_back(std::move(result_tree));
 
-    auto agg_base = std::make_unique<SimplestStmt>(
-        std::move(agg_children), std::move(saved_target_list),
-        SimplestNodeType::AggregateNode);
+    auto agg_base = std::make_unique<SimplestStmt>(std::move(agg_children),
+                                                   std::move(saved_target_list),
+                                                   SimplestNodeType::StmtNode);
 
     result_tree = std::make_unique<SimplestAggregate>(std::move(agg_base),
                                                       std::move(agg_functions));
@@ -256,7 +228,7 @@ ParseTreeToIR::ConvertFromClause(const json &from_list) {
         children.push_back(std::move(scan));
 
         auto base_stmt = std::make_unique<SimplestStmt>(
-            std::move(children), SimplestNodeType::CrossProductNode);
+            std::move(children), SimplestNodeType::StmtNode);
 
         current_tree =
             std::make_unique<SimplestCrossProduct>(std::move(base_stmt));
@@ -301,10 +273,9 @@ ParseTreeToIR::ConvertJoinExpr(const json &join_node) {
     // Convert SimplestExpr to SimplestVarComparison
     for (auto &expr : qual_exprs) {
       if (expr->GetNodeType() == SimplestNodeType::VarComparisonNode) {
-        // For now, just move the pointer (will need proper handling)
-        auto *expr_ptr = expr.release();
-        auto *var_comp = static_cast<SimplestVarComparison *>(expr_ptr);
-        join_conditions.emplace_back(var_comp);
+        auto var_comp = unique_ptr_cast<SimplestExpr, SimplestVarComparison>(
+            std::move(expr));
+        join_conditions.emplace_back(std::move(var_comp));
       }
     }
   }
@@ -337,7 +308,7 @@ ParseTreeToIR::ConvertRangeVar(const json &range_var) {
   std::vector<std::unique_ptr<SimplestAttr>> empty_attrs;
   auto base_stmt = std::make_unique<SimplestStmt>(std::move(empty_children),
                                                   std::move(empty_attrs),
-                                                  SimplestNodeType::ScanNode);
+                                                  SimplestNodeType::StmtNode);
 
   return std::make_unique<SimplestScan>(std::move(base_stmt), table_index,
                                         table_name);
@@ -718,12 +689,13 @@ void ParseTreeToIR::ExtractJoinAndFilterConditions(
 
   if (node_type == SimplestNodeType::VarComparisonNode) {
     // This is a join condition (column = column)
-    auto *expr_ptr = expr.release();
-    join_conditions.emplace_back(
-        static_cast<SimplestVarComparison *>(expr_ptr));
+    auto var_comp_expr =
+        unique_ptr_cast<SimplestExpr, SimplestVarComparison>(std::move(expr));
+    join_conditions.emplace_back(std::move(var_comp_expr));
   } else if (node_type == SimplestNodeType::LogicalExprNode) {
     // Recursively process logical expressions (AND/OR)
-    auto *logical_expr = static_cast<SimplestLogicalExpr *>(expr.get());
+    auto logical_expr =
+        unique_ptr_cast<SimplestExpr, SimplestLogicalExpr>(std::move(expr));
 
     // For AND expressions, we can separate join and filter conditions
     // For OR expressions, we need to keep them together
@@ -743,7 +715,9 @@ void ParseTreeToIR::ExtractJoinAndFilterConditions(
       // Don't add the LogicalExpr itself since we've extracted its children
     } else {
       // For OR/NOT, keep the entire expression as a filter condition
-      filter_conditions.push_back(std::move(expr));
+      filter_conditions.push_back(
+          unique_ptr_cast<SimplestLogicalExpr, SimplestExpr>(
+              std::move(logical_expr)));
     }
   } else {
     // This is a filter condition (VarConstComparison, IsNull, etc.)

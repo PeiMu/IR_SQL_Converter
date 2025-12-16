@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <limits.h>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -44,7 +45,8 @@ public:
 
 private:
   // Parse tree processing
-  std::unique_ptr<SimplestStmt> ConvertSelectStmt(const json &select_node);
+  std::unique_ptr<SimplestStmt> ConvertSelectStmt(const json &select_node,
+                                                  unsigned int sub_plan_id);
 
   // FROM clause processing
   std::unique_ptr<SimplestStmt> ConvertFromClause(const json &from_list);
@@ -84,8 +86,8 @@ private:
   // Helper to extract join conditions from expression trees
   void ExtractJoinAndFilterConditions(
       std::unique_ptr<SimplestExpr> expr,
-      std::vector<std::unique_ptr<SimplestVarComparison>>& join_conditions,
-      std::vector<std::unique_ptr<SimplestExpr>>& filter_conditions);
+      std::vector<std::unique_ptr<SimplestVarComparison>> &join_conditions,
+      std::vector<std::unique_ptr<SimplestExpr>> &filter_conditions);
 
   // State
   std::unordered_map<std::string, unsigned int> table_index_map;
@@ -94,6 +96,7 @@ private:
   unsigned int next_table_index = 0;
 
   // Aggregate function tracking
-  std::vector<std::pair<std::unique_ptr<SimplestAttr>, SimplestAggFnType>> agg_functions;
+  std::vector<std::pair<std::unique_ptr<SimplestAttr>, SimplestAggFnType>>
+      agg_functions;
 };
 } // namespace ir_sql_converter
