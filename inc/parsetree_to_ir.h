@@ -16,11 +16,6 @@
 
 #include "simplest_ir.h"
 
-// Forward declare libpg_query types
-extern "C" {
-#include "pg_query.h"
-}
-
 #include <nlohmann/json.hpp>
 
 namespace ir_sql_converter {
@@ -33,7 +28,7 @@ public:
   ~ParseTreeToIR() = default;
 
   // Main conversion function
-  std::unique_ptr<SimplestStmt> Convert(const std::string &sql,
+  std::unique_ptr<SimplestStmt> Convert(const json &parse_tree,
                                         unsigned int sub_plan_id);
 
   void Clear() {

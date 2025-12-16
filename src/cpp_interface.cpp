@@ -1,7 +1,6 @@
 #include <iostream>
 
 #include "cpp_interface.h"
-#include "simplest_ir.h"
 
 namespace ir_sql_converter {
 
@@ -47,10 +46,10 @@ std::unique_ptr<SimplestStmt> ConvertNodeStrToIR(const std::string &nodestr,
   return std::move(postgres_stmt);
 }
 
-std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const std::string &sql,
+std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const json &parse_tree,
                                                    unsigned int sub_plan_id) {
   ParseTreeToIR converter;
-  return converter.Convert(sql, sub_plan_id);
+  return converter.Convert(parse_tree, sub_plan_id);
 }
 
 std::unique_ptr<SimplestStmt>
@@ -64,7 +63,7 @@ ConvertDuckDBPlanToIR(duckdb::Binder &binder, duckdb::ClientContext &context,
   return std::move(ir);
 }
 
-std::string ConvertIRToSQL(SimplestStmt &simplest_stmt, int query_id,
+std::string ConvertIRToSQL(SimplestStmt &simplest_stmt, size_t query_id,
                            bool save_file, const std::string &sql_path) {
   IRToSQLConverter ir_to_sql_converter;
   std::string sql_code =

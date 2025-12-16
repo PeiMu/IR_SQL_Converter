@@ -5,23 +5,9 @@
 #include <nlohmann/json.hpp>
 
 namespace ir_sql_converter {
-std::unique_ptr<SimplestStmt> ParseTreeToIR::Convert(const std::string &sql,
+std::unique_ptr<SimplestStmt> ParseTreeToIR::Convert(const json &parse_tree,
                                                      unsigned int sub_plan_id) {
   Clear();
-
-  // Parse SQL using libpg_query
-  PgQueryParseResult result = pg_query_parse(sql.c_str());
-
-  if (result.error) {
-    std::string error_msg =
-        "Parse error: " + std::string(result.error->message);
-    pg_query_free_parse_result(result);
-    throw std::runtime_error(error_msg);
-  }
-
-  // Parse JSON
-  json parse_tree = json::parse(result.parse_tree);
-  pg_query_free_parse_result(result);
 
   // Extract SELECT statement
   if (!parse_tree.contains("stmts") || parse_tree["stmts"].empty()) {
@@ -42,8 +28,6 @@ std::unique_ptr<SimplestStmt> ParseTreeToIR::Convert(const std::string &sql,
 std::unique_ptr<SimplestStmt>
 ParseTreeToIR::ConvertSelectStmt(const json &select_node,
                                  unsigned int sub_plan_id) {
-  std::cout << select_node.dump(2) << std::endl;
-
   // Convert FROM clause first (builds table index map)
   std::unique_ptr<SimplestStmt> from_tree = nullptr;
   if (select_node.contains("fromClause") &&
