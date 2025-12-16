@@ -531,7 +531,7 @@ std::string IRToSQLConverter::CollectFilter(
     case SimplestExprType::TextLike:
       ret_str += " LIKE ";
       break;
-    case SimplestExprType::TEXT_Not_LIKE:
+    case SimplestExprType::Text_Not_Like:
       ret_str += " NOT LIKE ";
       break;
     default:

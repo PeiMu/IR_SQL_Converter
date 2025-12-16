@@ -367,11 +367,11 @@ ParseTreeToIR::ConvertAExpr(const json &expr_node) {
                                          : "";
   }
 
+  std::unique_ptr<SimplestExpr> result = nullptr;
+
   // Handle IN expressions
-  if (kind == "AEXPR_IN") {
+  if ("AEXPR_IN" == kind) {
     // For IN expressions, convert to OR of multiple equality conditions
-    // k.keyword IN ('superhero', 'sequel') -> k.keyword = 'superhero' OR
-    // k.keyword = 'sequel'
     json left_node = expr_node["lexpr"];
     json right_node = expr_node["rexpr"];
 
@@ -387,9 +387,8 @@ ParseTreeToIR::ConvertAExpr(const json &expr_node) {
     // Create first comparison
     auto attr = ConvertColumnRef(left_node["ColumnRef"]);
     auto const_var = ConvertAConst(list_items[0]["A_Const"]);
-    std::unique_ptr<SimplestExpr> result =
-        std::make_unique<SimplestVarConstComparison>(
-            SimplestExprType::Equal, std::move(attr), std::move(const_var));
+    result = std::make_unique<SimplestVarConstComparison>(
+        SimplestExprType::Equal, std::move(attr), std::move(const_var));
 
     // Chain remaining comparisons with OR
     for (size_t i = 1; i < list_items.size(); i++) {
@@ -402,45 +401,48 @@ ParseTreeToIR::ConvertAExpr(const json &expr_node) {
           SimplestLogicalOp::LogicalOr, std::move(result),
           std::move(comparison));
     }
+  } else {
+    // For the others expressions, e.g., "Like", "=", ">", "<", etc.
+    // Get operator
+    std::string op_name;
+    if (expr_node.contains("name") && !expr_node["name"].empty()) {
+      op_name = expr_node["name"][0]["String"]["sval"];
+    }
 
-    return result;
+    SimplestExprType expr_type = ConvertToSimplestExprType(op_name);
+
+    // Get left and right operands
+    json left_node = expr_node["lexpr"];
+    json right_node = expr_node["rexpr"];
+
+    // Check if it's column-column comparison (VarComparison) or column-const
+    // (VarConstComparison)
+    bool left_is_column = left_node.contains("ColumnRef");
+    bool right_is_column = right_node.contains("ColumnRef");
+    bool right_is_const = right_node.contains("A_Const");
+
+    if (left_is_column && right_is_column) {
+      // VarComparison (join condition)
+      auto left_attr = ConvertColumnRef(left_node["ColumnRef"]);
+      auto right_attr = ConvertColumnRef(right_node["ColumnRef"]);
+
+      result = std::make_unique<SimplestVarComparison>(
+          expr_type, std::move(left_attr), std::move(right_attr));
+    } else if (left_is_column && right_is_const) {
+      // VarConstComparison (filter condition)
+      auto attr = ConvertColumnRef(left_node["ColumnRef"]);
+      auto const_var = ConvertAConst(right_node["A_Const"]);
+
+      result = std::make_unique<SimplestVarConstComparison>(
+          expr_type, std::move(attr), std::move(const_var));
+    } else {
+      std::cout << "Warning: unsupported in ConvertAExpr. left_is_column: "
+                << left_is_column << ", right_is_column: " << right_is_column
+                << ", right_is_const" << right_is_const << "." << std::endl;
+    }
   }
 
-  // Get operator
-  std::string op_name;
-  if (expr_node.contains("name") && !expr_node["name"].empty()) {
-    op_name = expr_node["name"][0]["String"]["sval"];
-  }
-
-  SimplestExprType expr_type = ConvertToSimplestExprType(op_name);
-
-  // Get left and right operands
-  json left_node = expr_node["lexpr"];
-  json right_node = expr_node["rexpr"];
-
-  // Check if it's column-column comparison (VarComparison) or column-const
-  // (VarConstComparison)
-  bool left_is_column = left_node.contains("ColumnRef");
-  bool right_is_column = right_node.contains("ColumnRef");
-  bool right_is_const = right_node.contains("A_Const");
-
-  if (left_is_column && right_is_column) {
-    // VarComparison (join condition)
-    auto left_attr = ConvertColumnRef(left_node["ColumnRef"]);
-    auto right_attr = ConvertColumnRef(right_node["ColumnRef"]);
-
-    return std::make_unique<SimplestVarComparison>(
-        expr_type, std::move(left_attr), std::move(right_attr));
-  } else if (left_is_column && right_is_const) {
-    // VarConstComparison (filter condition)
-    auto attr = ConvertColumnRef(left_node["ColumnRef"]);
-    auto const_var = ConvertAConst(right_node["A_Const"]);
-
-    return std::make_unique<SimplestVarConstComparison>(
-        expr_type, std::move(attr), std::move(const_var));
-  }
-
-  throw std::runtime_error("Unsupported expression type in WHERE clause");
+  return result;
 }
 
 std::unique_ptr<SimplestExpr>
@@ -477,12 +479,13 @@ ParseTreeToIR::ConvertBoolExpr(const json &bool_expr) {
     }
   }
 
+  std::unique_ptr<SimplestExpr> result = nullptr;
   json args = bool_expr["args"];
   if (logical_op == SimplestLogicalOp::LogicalNot) {
     // NOT has only one argument
     auto right_exprs = ConvertWhereClause(args[0]);
-    return std::make_unique<SimplestLogicalExpr>(logical_op, nullptr,
-                                                 std::move(right_exprs[0]));
+    result = std::make_unique<SimplestLogicalExpr>(logical_op, nullptr,
+                                                   std::move(right_exprs[0]));
   } else {
     // AND/OR can have two or more arguments - chain them together
     if (args.empty()) {
@@ -491,7 +494,7 @@ ParseTreeToIR::ConvertBoolExpr(const json &bool_expr) {
 
     // Start with the first argument
     auto first_exprs = ConvertWhereClause(args[0]);
-    std::unique_ptr<SimplestExpr> result = std::move(first_exprs[0]);
+    result = std::move(first_exprs[0]);
 
     // Chain all remaining arguments with the same logical operator
     for (size_t i = 1; i < args.size(); i++) {
@@ -499,9 +502,9 @@ ParseTreeToIR::ConvertBoolExpr(const json &bool_expr) {
       result = std::make_unique<SimplestLogicalExpr>(
           logical_op, std::move(result), std::move(next_exprs[0]));
     }
-
-    return result;
   }
+
+  return result;
 }
 
 std::unique_ptr<SimplestExpr>
@@ -534,10 +537,12 @@ ParseTreeToIR::ConvertTargetList(const json &target_list) {
 
 std::unique_ptr<SimplestAttr>
 ParseTreeToIR::ConvertResTarget(const json &res_target) {
+  std::unique_ptr<SimplestAttr> result;
+
   if (res_target.contains("val")) {
     json val = res_target["val"];
     if (val.contains("ColumnRef")) {
-      return ConvertColumnRef(val["ColumnRef"]);
+      result = ConvertColumnRef(val["ColumnRef"]);
     } else if (val.contains("FuncCall")) {
       // Handle aggregate functions like MIN, MAX, COUNT, etc.
       json func_call = val["FuncCall"];
@@ -557,21 +562,20 @@ ParseTreeToIR::ConvertResTarget(const json &res_target) {
           func_call.contains("args") && !func_call["args"].empty()) {
         json first_arg = func_call["args"][0];
         if (first_arg.contains("ColumnRef")) {
-          auto attr = ConvertColumnRef(first_arg["ColumnRef"]);
+          result = ConvertColumnRef(first_arg["ColumnRef"]);
           // Store aggregate function for later processing
-          auto attr_copy = std::make_unique<SimplestAttr>(*attr);
+          auto attr_copy = std::make_unique<SimplestAttr>(*result);
           agg_functions.emplace_back(std::move(attr_copy), agg_type);
-          return attr;
         }
+      } else {
+        // If no args or unsupported format, skip this target
+        std::cout << "Warning: FuncCall without column argument, skipping"
+                  << std::endl;
+        return nullptr;
       }
-
-      // If no args or unsupported format, skip this target
-      std::cout << "Warning: FuncCall without column argument, skipping"
-                << std::endl;
-      return nullptr;
     }
   }
-  return nullptr;
+  return result;
 }
 
 std::unique_ptr<SimplestAttr>

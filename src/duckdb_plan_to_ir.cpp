@@ -495,7 +495,7 @@ SimplestExprType DuckToIR::ConvertCompType(duckdb::ExpressionType type) {
   case duckdb::ExpressionType::COMPARE_IN:
     return SimplestExprType::TextLike;
   case duckdb::ExpressionType::COMPARE_NOT_IN:
-    return SimplestExprType::TEXT_Not_LIKE;
+    return SimplestExprType::Text_Not_Like;
   case duckdb::ExpressionType::CONJUNCTION_AND:
   case duckdb::ExpressionType::CONJUNCTION_OR:
     return SimplestExprType::LogicalOp;

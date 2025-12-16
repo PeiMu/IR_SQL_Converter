@@ -2060,7 +2060,7 @@ SimplestExprType NodestrToIR::GetSimplestComparisonType(unsigned int type_id) {
     simplest_comprison_type = TextLike;
     break;
   case 1210:
-    simplest_comprison_type = TEXT_Not_LIKE;
+    simplest_comprison_type = Text_Not_Like;
     break;
   case 85:
   case 531:

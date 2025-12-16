@@ -59,7 +59,7 @@ enum SimplestExprType {
   NullType,
   NonNullType,
   TextLike,
-  TEXT_Not_LIKE,
+  Text_Not_Like,
   LogicalOp,
   SingleAttr
 };
@@ -436,7 +436,7 @@ public:
     case TextLike:
       comparison_op = " ~~ ";
       break;
-    case TEXT_Not_LIKE:
+    case Text_Not_Like:
       comparison_op = " !~~ ";
       break;
     case LessThan:
@@ -509,7 +509,7 @@ public:
     case TextLike:
       comparison_op = " ~~ ";
       break;
-    case TEXT_Not_LIKE:
+    case Text_Not_Like:
       comparison_op = " !~~ ";
       break;
     case LessThan:
@@ -583,7 +583,7 @@ public:
     case TextLike:
       comparison_op = " ~~ ";
       break;
-    case TEXT_Not_LIKE:
+    case Text_Not_Like:
       comparison_op = " !~~ ";
       break;
     case LessThan:
@@ -650,7 +650,7 @@ public:
       return str;
     case Equal:
     case TextLike:
-    case TEXT_Not_LIKE:
+    case Text_Not_Like:
     case LessThan:
     case GreaterThan:
     case LessEqual:
