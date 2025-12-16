@@ -5,7 +5,8 @@
 #include <nlohmann/json.hpp>
 
 namespace ir_sql_converter {
-std::unique_ptr<SimplestStmt> ParseTreeToIR::Convert(const std::string &sql) {
+std::unique_ptr<SimplestStmt> ParseTreeToIR::Convert(const std::string &sql,
+                                                     unsigned int sub_plan_id) {
   Clear();
 
   // Parse SQL using libpg_query
@@ -35,7 +36,7 @@ std::unique_ptr<SimplestStmt> ParseTreeToIR::Convert(const std::string &sql) {
 
   json select_stmt = first_stmt["stmt"]["SelectStmt"];
 
-  return ConvertSelectStmt(select_stmt, 0);
+  return ConvertSelectStmt(select_stmt, sub_plan_id);
 }
 
 std::unique_ptr<SimplestStmt>

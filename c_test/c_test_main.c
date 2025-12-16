@@ -109,7 +109,7 @@ int TestConvertSQLToIR_C_PostgreSQL() {
 
   printf("Testing ParseTree to IR conversion for SQL query:\n%s\n", str);
 
-  IRConverterStmt stmt = ConvertParseTreeToIR_C(str);
+  IRConverterStmt stmt = ConvertParseTreeToIR_C(str, 1);
   if (!stmt) {
     fprintf(stderr, "Failed to convert SQL to IR\n");
     free(str);

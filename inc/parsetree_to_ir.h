@@ -33,7 +33,8 @@ public:
   ~ParseTreeToIR() = default;
 
   // Main conversion function
-  std::unique_ptr<SimplestStmt> Convert(const std::string &sql);
+  std::unique_ptr<SimplestStmt> Convert(const std::string &sql,
+                                        unsigned int sub_plan_id);
 
   void Clear() {
     table_index_map.clear();

@@ -60,14 +60,15 @@ IRConverterStmt ConvertNodeStrToIR_C(const char *nodestr, size_t query_id) {
   }
 }
 
-IRConverterStmt ConvertParseTreeToIR_C(const char *sql) {
+IRConverterStmt ConvertParseTreeToIR_C(const char *sql,
+                                       unsigned int sub_plan_id) {
   if (!sql) {
     return nullptr;
   }
 
   try {
     std::string sql_str(sql);
-    auto stmt = ConvertParseTreeToIR(sql_str);
+    auto stmt = ConvertParseTreeToIR(sql_str, sub_plan_id);
 
     auto *internal = new IRConverterStmtInternal();
     internal->stmt = std::move(stmt);

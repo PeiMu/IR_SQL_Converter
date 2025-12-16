@@ -47,9 +47,10 @@ std::unique_ptr<SimplestStmt> ConvertNodeStrToIR(const std::string &nodestr,
   return std::move(postgres_stmt);
 }
 
-std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const std::string &sql) {
+std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const std::string &sql,
+                                                   unsigned int sub_plan_id) {
   ParseTreeToIR converter;
-  return converter.Convert(sql);
+  return converter.Convert(sql, sub_plan_id);
 }
 
 std::unique_ptr<SimplestStmt>

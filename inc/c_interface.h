@@ -13,7 +13,8 @@ IRConverterStmtList ConvertNodeStrToIRFromFile_C(const char *nodestr_file_name);
 
 IRConverterStmt ConvertNodeStrToIR_C(const char *nodestr, size_t query_id);
 
-IRConverterStmt ConvertParseTreeToIR_C(const char *sql);
+IRConverterStmt ConvertParseTreeToIR_C(const char *sql,
+                                       unsigned int sub_plan_id);
 
 size_t StmtListSize(IRConverterStmtList list);
 

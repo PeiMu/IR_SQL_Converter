@@ -15,7 +15,8 @@ ConvertNodeStrToIRFromFile(const std::string &nodestr_file_name);
 std::unique_ptr<SimplestStmt> ConvertNodeStrToIR(const std::string &nodestr,
                                                  size_t query_id);
 
-std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const std::string &sql);
+std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const std::string &sql,
+                                                   unsigned int sub_plan_id);
 
 std::unique_ptr<SimplestStmt>
 ConvertDuckDBPlanToIR(duckdb::Binder &binder, duckdb::ClientContext &context,
