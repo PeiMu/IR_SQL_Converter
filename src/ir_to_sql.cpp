@@ -198,6 +198,35 @@ void IRToSQLConverter::GenerateSQL(SimplestStmt &op) {
     if (!agg_op.groups.empty()) {
       group_by_vec = std::move(agg_op.groups);
     }
+
+    // Process target_list if present (for SELECT clause with aggregates)
+    if (!agg_op.target_list.empty()) {
+      for (size_t idx = 0; idx < agg_op.target_list.size(); idx++) {
+        auto &target = agg_op.target_list[idx];
+        auto target_table_index = target->GetTableIndex();
+
+        if (table_names.find(target_table_index) == table_names.end()) {
+          continue;
+        }
+
+        std::string table_name = table_names[target_table_index];
+        std::string actual_col_name = target->GetColumnName();
+        unsigned int col_index = target->GetColumnIndex();
+
+        std::string select_str = table_name + "_" + std::to_string(target_table_index) + "." + actual_col_name;
+
+        // Check if this column has an aggregate function
+        auto agg_key = agg_field_key(target_table_index, col_index);
+        auto agg_it = agg_field.find(agg_key);
+        if (agg_it != agg_field.end()) {
+          // Wrap with aggregate function
+          select_str = agg_it->second + "(" + select_str + ")";
+        }
+
+        select_field.emplace_back(select_str);
+      }
+    }
+
     break;
   }
   case SimplestNodeType::OrderNode: {
@@ -293,6 +322,25 @@ void IRToSQLConverter::GenerateSQL(SimplestStmt &op) {
 #ifdef DEBUG
     assert(!filter_op.qual_vec.empty());
 #endif
+
+    // Process target_list if present (for SELECT clause)
+    if (!filter_op.target_list.empty()) {
+      for (size_t idx = 0; idx < filter_op.target_list.size(); idx++) {
+        auto &target = filter_op.target_list[idx];
+        auto target_table_index = target->GetTableIndex();
+
+        if (table_names.find(target_table_index) == table_names.end()) {
+          continue;
+        }
+
+        std::string table_name = table_names[target_table_index];
+        std::string actual_col_name = target->GetColumnName();
+
+        std::string select_str = table_name + "_" + std::to_string(target_table_index) + "." + actual_col_name;
+        select_field.emplace_back(select_str);
+      }
+    }
+
     // `WHERE `
     for (const auto &qual : filter_op.qual_vec) {
       if (SingleAttr == qual->GetSimplestExprType()) {

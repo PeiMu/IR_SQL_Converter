@@ -47,6 +47,11 @@ std::unique_ptr<SimplestStmt> ConvertNodeStrToIR(const std::string &nodestr,
   return std::move(postgres_stmt);
 }
 
+std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const std::string &sql) {
+  ParseTreeToIR converter;
+  return converter.Convert(sql);
+}
+
 std::unique_ptr<SimplestStmt>
 ConvertDuckDBPlanToIR(duckdb::Binder &binder, duckdb::ClientContext &context,
                       duckdb::LogicalOperator *duckdb_plan_pointer,

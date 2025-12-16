@@ -60,6 +60,24 @@ IRConverterStmt ConvertNodeStrToIR_C(const char *nodestr, size_t query_id) {
   }
 }
 
+IRConverterStmt ConvertParseTreeToIR_C(const char *sql) {
+  if (!sql) {
+    return nullptr;
+  }
+
+  try {
+    std::string sql_str(sql);
+    auto stmt = ConvertParseTreeToIR(sql_str);
+
+    auto *internal = new IRConverterStmtInternal();
+    internal->stmt = std::move(stmt);
+
+    return static_cast<IRConverterStmt>(internal);
+  } catch (...) {
+    return nullptr;
+  }
+}
+
 size_t StmtListSize(IRConverterStmtList list) {
   if (!list) {
     return 0;
@@ -100,6 +118,7 @@ char *ConvertIRToSQL_C(IRConverterStmt stmt, int query_id, int save_file,
 
   try {
     auto *simplest_stmt = static_cast<SimplestStmt *>(stmt);
+    simplest_stmt->Print(true);
     std::string sql_path_str = sql_path ? std::string(sql_path) : "./";
     std::string sql =
         ConvertIRToSQL(*simplest_stmt, query_id, save_file == 1, sql_path_str);

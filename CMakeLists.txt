@@ -31,39 +31,63 @@ if(EXISTS ${DUCKDB_ROOT})
             PATHS ${DUCKDB_ROOT}/build/release/src ${DUCKDB_ROOT}/build/debug/src
             NO_DEFAULT_PATH
     )
+else()
+    message(WARNING "DuckDB not found at ${LIBPG_QUERY_ROOT}")
 endif()
+
+# libpg_query
+set(LIBPG_QUERY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../libpg_query" CACHE PATH "libpg_query source path")
+if(EXISTS ${LIBPG_QUERY_ROOT})
+    message(STATUS "Found libpg_query at: ${LIBPG_QUERY_ROOT}")
+
+    include_directories(${LIBPG_QUERY_ROOT})
+
+    find_library(LIBPG_QUERY_LIB
+            NAMES pg_query libpg_query
+            PATHS ${LIBPG_QUERY_ROOT}
+            NO_DEFAULT_PATH
+    )
+else()
+    message(WARNING "libpg_query not found at ${LIBPG_QUERY_ROOT}")
+endif()
+
+find_package(nlohmann_json REQUIRED)
 
 add_library(IR_SQL_Converter SHARED
         src/cpp_interface.cpp
         src/duckdb_plan_to_ir.cpp
         src/nodestr_to_ir.cpp
+        src/parsetree_to_ir.cpp
         src/ir_to_sql.cpp
 )
-target_link_libraries(IR_SQL_Converter lib_pg_query ${DUCKDB_LIB})
+target_link_libraries(IR_SQL_Converter lib_pg_query ${DUCKDB_LIB} ${LIBPG_QUERY_LIB} nlohmann_json::nlohmann_json)
 
 add_library(IR_SQL_Converter_static STATIC
         src/cpp_interface.cpp
         src/duckdb_plan_to_ir.cpp
         src/nodestr_to_ir.cpp
+        src/parsetree_to_ir.cpp
         src/ir_to_sql.cpp
 )
-target_link_libraries(IR_SQL_Converter_static lib_pg_query ${DUCKDB_LIB})
+target_link_libraries(IR_SQL_Converter_static lib_pg_query ${DUCKDB_LIB} ${LIBPG_QUERY_LIB} nlohmann_json::nlohmann_json)
 
 add_library(IR_SQL_Converter_C SHARED
         src/cpp_interface.cpp
         src/c_interface.cpp
         src/duckdb_plan_to_ir.cpp
         src/nodestr_to_ir.cpp
+        src/parsetree_to_ir.cpp
         src/ir_to_sql.cpp)
-target_link_libraries(IR_SQL_Converter_C lib_pg_query ${DUCKDB_LIB})
+target_link_libraries(IR_SQL_Converter_C lib_pg_query ${DUCKDB_LIB} ${LIBPG_QUERY_LIB} nlohmann_json::nlohmann_json)
 
 add_library(IR_SQL_Converter_C_static STATIC
         src/cpp_interface.cpp
         src/c_interface.cpp
         src/duckdb_plan_to_ir.cpp
         src/nodestr_to_ir.cpp
+        src/parsetree_to_ir.cpp
         src/ir_to_sql.cpp)
-target_link_libraries(IR_SQL_Converter_C_static lib_pg_query ${DUCKDB_LIB})
+target_link_libraries(IR_SQL_Converter_C_static lib_pg_query ${DUCKDB_LIB} ${LIBPG_QUERY_LIB} nlohmann_json::nlohmann_json)
 
 include_directories(${DUCKDB_ROOT}/src/include)
 
