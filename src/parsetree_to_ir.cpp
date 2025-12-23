@@ -281,13 +281,16 @@ ParseTreeToIR::ConvertJoinExpr(const json &join_node) {
 std::unique_ptr<SimplestStmt>
 ParseTreeToIR::ConvertRangeVar(const json &range_var) {
   std::string table_name = range_var["relname"];
-  unsigned int table_index = GetOrCreateTableIndex(table_name);
 
-  // Store alias if present
+  // Use alias as the table identifier if present, otherwise use table name
+  std::string table_identifier = table_name;
   if (range_var.contains("alias") && range_var["alias"].contains("aliasname")) {
-    std::string alias = range_var["alias"]["aliasname"];
-    alias_to_table_map[alias] = table_name;
+    table_identifier = range_var["alias"]["aliasname"];
+    alias_to_table_map[table_identifier] = table_name;
   }
+
+  // Create index based on the identifier (alias or table name)
+  unsigned int table_index = GetOrCreateTableIndex(table_identifier);
 
   std::vector<std::unique_ptr<SimplestStmt>> empty_children;
   std::vector<std::unique_ptr<SimplestAttr>> empty_attrs;
@@ -357,6 +360,37 @@ ParseTreeToIR::ConvertAExpr(const json &expr_node) {
           SimplestLogicalOp::LogicalOr, std::move(result),
           std::move(comparison));
     }
+  } else if ("AEXPR_BETWEEN" == kind) {
+    // For BETWEEN expressions: convert to (column >= lower AND column <= upper)
+    json left_node = expr_node["lexpr"];
+    json right_node = expr_node["rexpr"];
+
+    if (!left_node.contains("ColumnRef") || !right_node.contains("List")) {
+      throw std::runtime_error("Unsupported BETWEEN expression format");
+    }
+
+    auto list_items = right_node["List"]["items"];
+    if (list_items.size() != 2) {
+      throw std::runtime_error("BETWEEN requires exactly 2 values");
+    }
+
+    // Create: column >= lower_bound
+    auto attr1 = ConvertColumnRef(left_node["ColumnRef"]);
+    auto lower_const = ConvertAConst(list_items[0]["A_Const"]);
+    auto lower_comparison = std::make_unique<SimplestVarConstComparison>(
+        SimplestExprType::GreaterEqual, std::move(attr1),
+        std::move(lower_const));
+
+    // Create: column <= upper_bound
+    auto attr2 = ConvertColumnRef(left_node["ColumnRef"]);
+    auto upper_const = ConvertAConst(list_items[1]["A_Const"]);
+    auto upper_comparison = std::make_unique<SimplestVarConstComparison>(
+        SimplestExprType::LessEqual, std::move(attr2), std::move(upper_const));
+
+    // Combine with AND
+    result = std::make_unique<SimplestLogicalExpr>(
+        SimplestLogicalOp::LogicalAnd, std::move(lower_comparison),
+        std::move(upper_comparison));
   } else {
     // For the others expressions, e.g., "Like", "=", ">", "<", etc.
     // Get operator
@@ -394,7 +428,7 @@ ParseTreeToIR::ConvertAExpr(const json &expr_node) {
     } else {
       std::cout << "Warning: unsupported in ConvertAExpr. left_is_column: "
                 << left_is_column << ", right_is_column: " << right_is_column
-                << ", right_is_const" << right_is_const << "." << std::endl;
+                << ", right_is_const: " << right_is_const << "." << std::endl;
     }
   }
 
@@ -467,10 +501,17 @@ std::unique_ptr<SimplestExpr>
 ParseTreeToIR::ConvertNullTest(const json &null_test) {
   auto attr = ConvertColumnRef(null_test["arg"]["ColumnRef"]);
 
-  int nulltesttype = null_test["nulltesttype"];
-  SimplestExprType expr_type = (nulltesttype == 0)
-                                   ? SimplestExprType::NullType
-                                   : SimplestExprType::NonNullType;
+  // Handle both string and integer formats
+  SimplestExprType expr_type;
+  if (null_test["nulltesttype"].is_string()) {
+    std::string nulltesttype_str = null_test["nulltesttype"];
+    expr_type = (nulltesttype_str == "IS_NULL") ? SimplestExprType::NullType
+                                                : SimplestExprType::NonNullType;
+  } else {
+    int nulltesttype = null_test["nulltesttype"];
+    expr_type = (nulltesttype == 0) ? SimplestExprType::NullType
+                                    : SimplestExprType::NonNullType;
+  }
 
   return std::make_unique<SimplestIsNullExpr>(expr_type, std::move(attr));
 }
@@ -538,7 +579,8 @@ std::unique_ptr<SimplestAttr>
 ParseTreeToIR::ConvertColumnRef(const json &col_ref) {
   json fields = col_ref["fields"];
 
-  std::string table_name;
+  std::string table_identifier;  // The key to look up in table_index_map
+  std::string actual_table_name; // The actual table name for schema lookup
   std::string column_name;
 
   if (fields.size() == 1) {
@@ -546,18 +588,22 @@ ParseTreeToIR::ConvertColumnRef(const json &col_ref) {
     column_name = fields[0]["String"]["sval"];
     // Infer table from context (use first table for now)
     if (!table_names.empty()) {
-      table_name = table_names[0];
+      table_identifier = table_names[0];
+      actual_table_name = ResolveTableName(table_identifier);
     }
   } else if (fields.size() == 2) {
     // Table.column or Alias.column (e.g., "t1.id" or "t.id")
-    std::string table_or_alias = fields[0]["String"]["sval"];
+    table_identifier = fields[0]["String"]["sval"];
     column_name = fields[1]["String"]["sval"];
-    // Resolve alias to actual table name
-    table_name = ResolveTableName(table_or_alias);
+    // Resolve alias to actual table name for schema lookup
+    actual_table_name = ResolveTableName(table_identifier);
   }
 
-  unsigned int table_index = table_index_map[table_name];
-  SimplestVarType var_type = GetVarTypeFromColumn(table_name, column_name);
+  // Look up index using the identifier (alias or table name), NOT the resolved
+  // name
+  unsigned int table_index = table_index_map[table_identifier];
+  SimplestVarType var_type =
+      GetVarTypeFromColumn(actual_table_name, column_name);
 
   // Column index is unknown without schema, use 0 for now
   unsigned int column_index = 0;
@@ -610,6 +656,8 @@ ParseTreeToIR::ConvertToSimplestExprType(const std::string &op_name) {
     return SimplestExprType::GreaterEqual;
   if (op_name == "~~" || op_name == "LIKE")
     return SimplestExprType::TextLike;
+  if (op_name == "!~~" || op_name == "NOT LIKE")
+    return SimplestExprType::Text_Not_Like;
   return SimplestExprType::Equal; // default
 }
 
