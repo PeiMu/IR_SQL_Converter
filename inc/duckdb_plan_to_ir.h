@@ -93,6 +93,7 @@ private:
   SimplestOrderType ConvertOrderType(duckdb::OrderType type);
   std::unique_ptr<SimplestAttr>
   ConvertAttr(const duckdb::unique_ptr<duckdb::Expression> &expr);
+  duckdb::column_t ResolveColumnIndex(duckdb::idx_t table_idx, duckdb::idx_t binding_idx);
   std::unique_ptr<SimplestConstVar>
   ConvertConstVar(const duckdb::BoundConstantExpression &expr,
                   std::string prefix = "", const std::string &appendix = "");
@@ -107,5 +108,10 @@ private:
 
   duckdb::Binder &binder;
   duckdb::ClientContext &context;
+
+  // Mapping from table_index to column_ids for resolving binding indices to base table column indices
+  std::unordered_map<duckdb::idx_t, duckdb::vector<duckdb::column_t>> table_column_ids_map;
+  // Mapping from table_index to column names for resolving column indices to names
+  std::unordered_map<duckdb::idx_t, duckdb::vector<std::string>> table_column_names_map;
 };
 } // namespace ir_sql_converter

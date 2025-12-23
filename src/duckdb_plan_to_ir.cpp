@@ -125,9 +125,17 @@ DuckToIR::ConstructSimplestProj(duckdb::LogicalProjection &proj_op,
   std::vector<std::unique_ptr<SimplestAttr>> target_list;
   for (const auto &expr : proj_op.expressions) {
     auto table_expr = GetConstTableExpr(expr);
+    // Resolve binding index to actual column index
+    auto actual_column_idx = ResolveColumnIndex(table_expr.table_idx, table_expr.column_idx);
+    // Get the correct column name from the base table schema
+    std::string actual_column_name = table_expr.column_name;
+    auto names_it = table_column_names_map.find(table_expr.table_idx);
+    if (names_it != table_column_names_map.end() && actual_column_idx < names_it->second.size()) {
+      actual_column_name = names_it->second[actual_column_idx];
+    }
     auto simplest_target = std::make_unique<SimplestAttr>(
         ConvertVarType(table_expr.return_type), table_expr.table_idx,
-        table_expr.column_idx, table_expr.column_name);
+        actual_column_idx, actual_column_name);
     target_list.emplace_back(std::move(simplest_target));
   }
   auto base_stmt = std::make_unique<SimplestStmt>(
@@ -350,15 +358,31 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
     const auto &left_cond = cond.left;
     auto left_type = ConvertVarType(left_cond->return_type);
     auto left_expr_info = GetConstTableExpr(left_cond);
+    // Resolve binding index to actual column index
+    auto left_actual_col_idx = ResolveColumnIndex(left_expr_info.table_idx, left_expr_info.column_idx);
+    // Get the correct column name from the base table schema
+    std::string left_actual_col_name = left_expr_info.column_name;
+    auto left_names_it = table_column_names_map.find(left_expr_info.table_idx);
+    if (left_names_it != table_column_names_map.end() && left_actual_col_idx < left_names_it->second.size()) {
+      left_actual_col_name = left_names_it->second[left_actual_col_idx];
+    }
     auto left_simplest_cond = std::make_unique<SimplestAttr>(
-        left_type, left_expr_info.table_idx, left_expr_info.column_idx,
-        left_expr_info.column_name);
+        left_type, left_expr_info.table_idx, left_actual_col_idx,
+        left_actual_col_name);
     const auto &right_cond = cond.right;
     auto right_type = ConvertVarType(right_cond->return_type);
     auto right_expr_info = GetConstTableExpr(right_cond);
+    // Resolve binding index to actual column index
+    auto right_actual_col_idx = ResolveColumnIndex(right_expr_info.table_idx, right_expr_info.column_idx);
+    // Get the correct column name from the base table schema
+    std::string right_actual_col_name = right_expr_info.column_name;
+    auto right_names_it = table_column_names_map.find(right_expr_info.table_idx);
+    if (right_names_it != table_column_names_map.end() && right_actual_col_idx < right_names_it->second.size()) {
+      right_actual_col_name = right_names_it->second[right_actual_col_idx];
+    }
     auto right_simplest_cond = std::make_unique<SimplestAttr>(
-        right_type, right_expr_info.table_idx, right_expr_info.column_idx,
-        right_expr_info.column_name);
+        right_type, right_expr_info.table_idx, right_actual_col_idx,
+        right_actual_col_name);
 #ifdef DEBUG
     D_ASSERT(left_type == right_type);
 #endif
@@ -398,16 +422,28 @@ std::unique_ptr<SimplestScan>
 DuckToIR::ConstructSimplestScan(duckdb::LogicalGet &get_op) {
   auto table_index = get_op.table_index;
 
+  // Store column_ids and column names mapping for this table
+  table_column_ids_map[table_index] = get_op.column_ids;
+  table_column_names_map[table_index] = get_op.names;
+
   // add target list
   std::vector<std::unique_ptr<SimplestAttr>> target_list;
 #ifdef DEBUG
   get_op.names.size() == get_op.returned_types.size();
 #endif
-  for (size_t column_idx = 0; column_idx < get_op.names.size(); column_idx++) {
+  // Build target list using actual column indices from the base table
+  // column_ids maps: column_ids[binding_idx] = base_table_column_idx
+  for (size_t binding_idx = 0; binding_idx < get_op.column_ids.size(); binding_idx++) {
+    auto column_id = get_op.column_ids[binding_idx];
+    if (column_id == duckdb::COLUMN_IDENTIFIER_ROW_ID) {
+      continue; // Skip row ID column
+    }
+    // Store the base table column index (column_id) in SimplestAttr
+    // This ensures the IR uses base table schema indices consistently
     std::unique_ptr<SimplestAttr> simplest_attr =
         std::make_unique<SimplestAttr>(
-            ConvertVarType(get_op.returned_types[column_idx]), table_index,
-            column_idx, get_op.names[column_idx]);
+            ConvertVarType(get_op.returned_types[column_id]), table_index,
+            column_id, get_op.names[column_id]);
     target_list.emplace_back(std::move(simplest_attr));
   }
 
@@ -565,12 +601,36 @@ SimplestOrderType DuckToIR::ConvertOrderType(duckdb::OrderType type) {
   }
 }
 
+duckdb::column_t DuckToIR::ResolveColumnIndex(duckdb::idx_t table_idx, duckdb::idx_t binding_idx) {
+  auto it = table_column_ids_map.find(table_idx);
+  if (it == table_column_ids_map.end() || binding_idx >= it->second.size()) {
+    // If mapping not found or binding_idx out of range, return binding_idx as-is
+    // This handles cases where the table might not be a LogicalGet (e.g., intermediate results)
+    return binding_idx;
+  }
+  auto column_id = it->second[binding_idx];
+  if (column_id == duckdb::COLUMN_IDENTIFIER_ROW_ID) {
+    return binding_idx; // Return binding index for row ID
+  }
+  return column_id;
+}
+
 std::unique_ptr<SimplestAttr>
 DuckToIR::ConvertAttr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
   duckdb::TableExpr table_expr = GetConstTableExpr(expr);
+  // Resolve binding index to actual column index using column_ids mapping
+  auto actual_column_idx = ResolveColumnIndex(table_expr.table_idx, table_expr.column_idx);
+
+  // Get the correct column name from the base table schema
+  std::string actual_column_name = table_expr.column_name;
+  auto names_it = table_column_names_map.find(table_expr.table_idx);
+  if (names_it != table_column_names_map.end() && actual_column_idx < names_it->second.size()) {
+    actual_column_name = names_it->second[actual_column_idx];
+  }
+
   auto simplest_attr = std::make_unique<SimplestAttr>(
       ConvertVarType(table_expr.return_type), table_expr.table_idx,
-      table_expr.column_idx, table_expr.column_name);
+      actual_column_idx, actual_column_name);
   return simplest_attr;
 }
 
@@ -735,9 +795,17 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
   }
   case duckdb::ExpressionType::BOUND_COLUMN_REF: {
     duckdb::TableExpr table_expr = GetConstTableExpr(expr);
+    // Resolve binding index to actual column index
+    auto actual_column_idx = ResolveColumnIndex(table_expr.table_idx, table_expr.column_idx);
+    // Get the correct column name from the base table schema
+    std::string actual_column_name = table_expr.column_name;
+    auto names_it = table_column_names_map.find(table_expr.table_idx);
+    if (names_it != table_column_names_map.end() && actual_column_idx < names_it->second.size()) {
+      actual_column_name = names_it->second[actual_column_idx];
+    }
     auto simplest_attr = std::make_unique<SimplestAttr>(
         ConvertVarType(table_expr.return_type), table_expr.table_idx,
-        table_expr.column_idx, table_expr.column_name);
+        actual_column_idx, actual_column_name);
     auto simplest_attr_expr =
         std::make_unique<SimplestSingleAttrExpr>(std::move(simplest_attr));
     return unique_ptr_cast<SimplestSingleAttrExpr, SimplestExpr>(
