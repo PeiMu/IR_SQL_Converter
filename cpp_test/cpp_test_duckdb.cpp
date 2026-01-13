@@ -17,8 +17,8 @@ using namespace duckdb;
 
 int main(int argc, char **argv) {
   std::string db_path = "/home/pei/Project/duckdb/measure/imdb.db";
-  std::string plan_dir = "/home/pei/Project/duckdb/measure/job_result/1.3.2/6d/"
-                         "logical_plan_v1.3.2_split_0.bin";
+  std::string plan_dir =
+      "/home/pei/Project/duckdb/measure/logical_plan_v1.3.2_split_0.bin";
 
   DuckDB db(db_path);
   Connection conn(db);

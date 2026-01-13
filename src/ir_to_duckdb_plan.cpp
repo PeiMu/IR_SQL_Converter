@@ -271,6 +271,50 @@ IRToDuck::ConstructDuckdbConstant(
   return duckdb::make_uniq<duckdb::BoundConstantExpression>(value);
 }
 
+duckdb::unique_ptr<duckdb::LogicalAggregate> IRToDuck::ConstructDuckdbAggregate(
+    const SimplestAggregate &simplest_agg,
+    duckdb::unique_ptr<duckdb::LogicalOperator> child) {
+  // Convert agg_fns to DuckDB aggregate expressions
+  duckdb::vector<duckdb::unique_ptr<duckdb::Expression>> agg_expressions;
+  for (const auto &agg_fn : simplest_agg.agg_fns) {
+    std::string agg_fn_name = ConvertAggFnType(agg_fn.second);
+
+    // Get aggregate function from catalog
+    auto &catalog = duckdb::Catalog::GetSystemCatalog(context);
+    auto &func_catalog =
+        catalog.GetEntry<duckdb::AggregateFunctionCatalogEntry>(context, "", "",
+                                                                agg_fn_name);
+
+    // Create aggregate function expression
+    auto agg_expr = duckdb::make_uniq<duckdb::BoundAggregateExpression>(
+        func_catalog.functions.GetFunctionByOffset(0),
+        duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>(),
+        duckdb::unique_ptr<duckdb::Expression>(), nullptr,
+        duckdb::AggregateType::NON_DISTINCT);
+
+    // Add column ref as child of aggregate
+    agg_expr->children.push_back(ConstructDuckdbColumnRef(agg_fn.first));
+    agg_expr->return_type = ConvertVarType(agg_fn.first->GetType());
+
+    agg_expressions.push_back(std::move(agg_expr));
+  }
+
+  // Create LogicalAggregate
+  auto logical_agg = duckdb::make_uniq<duckdb::LogicalAggregate>(
+      simplest_agg.GetGroupIndex(), simplest_agg.GetAggIndex(),
+      std::move(agg_expressions));
+
+  // Convert groups to DuckDB group expressions
+  for (const auto &group : simplest_agg.groups) {
+    logical_agg->groups.push_back(ConstructDuckdbColumnRef(group));
+  }
+
+  // Add child
+  logical_agg->children.push_back(std::move(child));
+
+  return logical_agg;
+}
+
 duckdb::unique_ptr<duckdb::LogicalOperator> IRToDuck::ConstructDuckdbPlan(
     const std::unique_ptr<SimplestStmt> &simplest_ir) {
   // Recursively build children first (bottom-up)
@@ -319,6 +363,11 @@ duckdb::unique_ptr<duckdb::LogicalOperator> IRToDuck::ConstructDuckdbPlan(
                                      std::move(left_child));
   }
 
+  case AggregateNode: {
+    auto &simplest_agg = simplest_ir->Cast<SimplestAggregate>();
+    return ConstructDuckdbAggregate(simplest_agg, std::move(left_child));
+  }
+
   default:
     throw std::runtime_error("Unsupported IR node type: " +
                              std::to_string(simplest_ir->GetNodeType()));
@@ -362,6 +411,21 @@ duckdb::LogicalType IRToDuck::ConvertVarType(SimplestVarType type) {
   default:
     std::cout << "Invalid postgres var type!" << std::endl;
     return duckdb::LogicalType(duckdb::LogicalTypeId::INVALID);
+  }
+}
+
+std::string IRToDuck::ConvertAggFnType(SimplestAggFnType type) {
+  switch (type) {
+  case SimplestAggFnType::Min:
+    return "min";
+  case SimplestAggFnType::Max:
+    return "max";
+  case SimplestAggFnType::Sum:
+    return "sum";
+  case SimplestAggFnType::Average:
+    return "avg";
+  default:
+    throw std::runtime_error("Unsupported SimplestAggFnType");
   }
 }
 

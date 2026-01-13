@@ -353,6 +353,36 @@ static void SerializeStmt(std::ostream &out, const SimplestStmt *stmt) {
     }
     break;
   }
+  case AggregateNode: {
+    auto &agg = stmt->Cast<SimplestAggregate>();
+
+    // Serialize agg_fns: vector<pair<SimplestAttr, SimplestAggFnType>>
+    size_t agg_fns_size = agg.agg_fns.size();
+    out.write(reinterpret_cast<const char *>(&agg_fns_size),
+              sizeof(agg_fns_size));
+    for (const auto &agg_fn : agg.agg_fns) {
+      SerializeAttr(out, agg_fn.first.get());
+      SimplestAggFnType agg_fn_type = agg_fn.second;
+      out.write(reinterpret_cast<const char *>(&agg_fn_type),
+                sizeof(agg_fn_type));
+    }
+
+    // Serialize groups: vector<SimplestAttr>
+    size_t groups_size = agg.groups.size();
+    out.write(reinterpret_cast<const char *>(&groups_size),
+              sizeof(groups_size));
+    for (const auto &group : agg.groups) {
+      SerializeAttr(out, group.get());
+    }
+
+    // Serialize agg_index and group_index
+    unsigned int agg_index = agg.GetAggIndex();
+    unsigned int group_index = agg.GetGroupIndex();
+    out.write(reinterpret_cast<const char *>(&agg_index), sizeof(agg_index));
+    out.write(reinterpret_cast<const char *>(&group_index),
+              sizeof(group_index));
+    break;
+  }
   default:
     throw std::runtime_error("Unknown SimplestStmt node type: " +
                              std::to_string(node_type));
@@ -517,6 +547,41 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
     auto hash = std::make_unique<SimplestHash>(std::move(children[0]),
                                                std::move(hash_keys));
     return hash;
+  }
+  case AggregateNode: {
+    // Deserialize agg_fns: vector<pair<SimplestAttr, SimplestAggFnType>>
+    size_t agg_fns_size;
+    in.read(reinterpret_cast<char *>(&agg_fns_size), sizeof(agg_fns_size));
+    agg_fn_pair agg_fns;
+    for (size_t i = 0; i < agg_fns_size; i++) {
+      auto attr = DeserializeAttr(in);
+      SimplestAggFnType agg_fn_type;
+      in.read(reinterpret_cast<char *>(&agg_fn_type), sizeof(agg_fn_type));
+      agg_fns.push_back(std::make_pair(std::move(attr), agg_fn_type));
+    }
+
+    // Deserialize groups: vector<SimplestAttr>
+    size_t groups_size;
+    in.read(reinterpret_cast<char *>(&groups_size), sizeof(groups_size));
+    std::vector<std::unique_ptr<SimplestAttr>> groups;
+    for (size_t i = 0; i < groups_size; i++) {
+      groups.push_back(DeserializeAttr(in));
+    }
+
+    // Deserialize agg_index and group_index
+    unsigned int agg_index, group_index;
+    in.read(reinterpret_cast<char *>(&agg_index), sizeof(agg_index));
+    in.read(reinterpret_cast<char *>(&group_index), sizeof(group_index));
+
+    // Create base_stmt with children and target_list
+    auto base_stmt = std::make_unique<SimplestStmt>(
+        std::move(children), std::move(target_list),
+        SimplestNodeType::AggregateNode);
+
+    auto agg = std::make_unique<SimplestAggregate>(
+        std::move(base_stmt), std::move(agg_fns), std::move(groups), agg_index,
+        group_index);
+    return agg;
   }
   default:
     throw std::runtime_error(

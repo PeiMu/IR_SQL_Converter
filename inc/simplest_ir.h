@@ -974,9 +974,9 @@ public:
     return str;
   }
 
-  unsigned int GetAggIndex() { return agg_index; }
+  unsigned int GetAggIndex() const { return agg_index; }
 
-  unsigned int GetGroupIndex() { return group_index; }
+  unsigned int GetGroupIndex() const { return group_index; }
 
   agg_fn_pair agg_fns;
   std::vector<std::unique_ptr<SimplestAttr>> groups;
