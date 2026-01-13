@@ -32,4 +32,12 @@ ConvertIRToDuckDBPlan(duckdb::Binder &binder, duckdb::ClientContext &context,
 std::string ConvertIRToSQL(SimplestStmt &simplest_stmt, size_t query_id,
                            bool save_file = false,
                            const std::string &sql_path = "");
+
+// SimplestIR serialization/deserialization functions
+void SaveSimplestIRToFile(const std::unique_ptr<SimplestStmt> &ir,
+                          const std::string &filename);
+
+std::unique_ptr<SimplestStmt>
+LoadSimplestIRFromFile(const std::string &filename);
+
 } // namespace ir_sql_converter

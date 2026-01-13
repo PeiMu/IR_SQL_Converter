@@ -44,6 +44,7 @@ add_library(IR_SQL_Converter SHARED
         src/nodestr_to_ir.cpp
         src/parsetree_to_ir.cpp
         src/ir_to_sql.cpp
+        src/simplest_ir_serializer.cpp
 )
 target_link_libraries(IR_SQL_Converter ${DUCKDB_LIB} ${LIBPG_QUERY_LIB} nlohmann_json::nlohmann_json)
 
@@ -54,6 +55,7 @@ add_library(IR_SQL_Converter_static STATIC
         src/nodestr_to_ir.cpp
         src/parsetree_to_ir.cpp
         src/ir_to_sql.cpp
+        src/simplest_ir_serializer.cpp
 )
 target_link_libraries(IR_SQL_Converter_static ${DUCKDB_LIB} ${LIBPG_QUERY_LIB} nlohmann_json::nlohmann_json)
 
@@ -64,7 +66,9 @@ add_library(IR_SQL_Converter_C SHARED
         src/ir_to_duckdb_plan.cpp
         src/nodestr_to_ir.cpp
         src/parsetree_to_ir.cpp
-        src/ir_to_sql.cpp)
+        src/ir_to_sql.cpp
+        src/simplest_ir_serializer.cpp
+)
 target_link_libraries(IR_SQL_Converter_C ${DUCKDB_LIB} ${LIBPG_QUERY_LIB} nlohmann_json::nlohmann_json)
 
 add_library(IR_SQL_Converter_C_static STATIC
@@ -74,7 +78,9 @@ add_library(IR_SQL_Converter_C_static STATIC
         src/ir_to_duckdb_plan.cpp
         src/nodestr_to_ir.cpp
         src/parsetree_to_ir.cpp
-        src/ir_to_sql.cpp)
+        src/ir_to_sql.cpp
+        src/simplest_ir_serializer.cpp
+)
 target_link_libraries(IR_SQL_Converter_C_static ${DUCKDB_LIB} ${LIBPG_QUERY_LIB} nlohmann_json::nlohmann_json)
 
 include_directories(${DUCKDB_ROOT}/src/include)
