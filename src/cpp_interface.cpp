@@ -63,6 +63,14 @@ ConvertDuckDBPlanToIR(duckdb::Binder &binder, duckdb::ClientContext &context,
   return std::move(ir);
 }
 
+duckdb::unique_ptr<duckdb::LogicalOperator>
+ConvertIRToDuckDBPlan(duckdb::Binder &binder, duckdb::ClientContext &context,
+                      const std::unique_ptr<SimplestStmt> &simplest_ir) {
+  ir_sql_converter::IRToDuck converter(binder, context);
+  auto duckdb_plan = converter.ConstructDuckdbPlan(simplest_ir);
+  return std::move(duckdb_plan);
+}
+
 std::string ConvertIRToSQL(SimplestStmt &simplest_stmt, size_t query_id,
                            bool save_file, const std::string &sql_path) {
   IRToSQLConverter ir_to_sql_converter;

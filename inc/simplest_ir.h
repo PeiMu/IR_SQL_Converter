@@ -139,6 +139,10 @@ private:
   std::string literal_value;
 };
 
+using table_str =
+    std::unordered_map<std::string,
+                       std::vector<std::unique_ptr<SimplestLiteral>>>;
+
 class SimplestVar : public SimplestNode {
 public:
   SimplestVar(SimplestVarType type, bool is_const, SimplestNodeType node_type)
@@ -863,7 +867,7 @@ public:
 
   ~SimplestProjection() override = default;
 
-  unsigned int GetIndex() { return table_index; }
+  unsigned int GetIndex() const { return table_index; }
 
   std::string Print(bool print = true) override {
     std::string str = "\n";
@@ -1223,13 +1227,13 @@ public:
       : SimplestStmt(std::move(base_stmt), FilterNode) {};
 
   //	SimplestFilter(std::unique_ptr<SimplestStmt> base_stmt,
-  //std::vector<std::unique_ptr<SimplestExpr>> filter_conditions) 	    :
-  //SimplestStmt(std::move(base_stmt), FilterNode),
-  //filter_conditions(std::move(filter_conditions)) {};
+  // std::vector<std::unique_ptr<SimplestExpr>> filter_conditions) 	    :
+  // SimplestStmt(std::move(base_stmt), FilterNode),
+  // filter_conditions(std::move(filter_conditions)) {};
 
   //		SimplestFilter(const SimplestFilter&) = delete; // no copy
-  //constructor 		SimplestFilter &operator=(const SimplestFilter&) = delete; // no
-  //copy assignment
+  // constructor 		SimplestFilter &operator=(const SimplestFilter&)
+  // = delete; // no copy assignment
   //
   //		SimplestFilter(SimplestFilter&&) = default;
   //		SimplestFilter &operator=(SimplestFilter&&) = default;
@@ -1263,9 +1267,10 @@ public:
 class SimplestScan : public SimplestStmt {
 public:
   SimplestScan(std::unique_ptr<SimplestStmt> base_stmt,
-               unsigned int table_index, std::string table_name)
+               unsigned int table_index, std::string table_name,
+               uint64_t estimated_cardinality = 0)
       : SimplestStmt(std::move(base_stmt), ScanNode), table_index(table_index),
-        table_name(table_name) {};
+        table_name(table_name), estimated_cardinality(estimated_cardinality) {};
 
   ~SimplestScan() override = default;
 
@@ -1275,11 +1280,15 @@ public:
 
   void SetTableName(std::string tbl_name) { table_name = std::move(tbl_name); }
 
+  uint64_t GetEstimatedCardinality() const { return estimated_cardinality; }
+  void SetEstimatedCardinality(uint64_t card) { estimated_cardinality = card; }
+
   std::string Print(bool print = true) override {
     std::string str = "\n";
     str += "╔══════════════════╗\n";
 
     str += "Table Scan \"" + table_name + "\":";
+    str += " (card=" + std::to_string(estimated_cardinality) + ")"; // ADD THIS
 
     str += SimplestStmt::Print(false);
     str += "╚══════════════════╝\n";
@@ -1293,6 +1302,7 @@ public:
 private:
   unsigned int table_index;
   std::string table_name;
+  uint64_t estimated_cardinality;
 };
 
 /*!
@@ -1300,9 +1310,10 @@ private:
 class SimplestChunk : public SimplestStmt {
 public:
   SimplestChunk(std::unique_ptr<SimplestStmt> base_stmt,
-                unsigned int table_index, std::vector<std::string> contents)
+                unsigned int table_index, std::vector<std::string> contents,
+                uint64_t estimated_cardinality = 0)
       : SimplestStmt(std::move(base_stmt), ChunkNode), table_index(table_index),
-        contents(contents) {};
+        contents(contents), estimated_cardinality(estimated_cardinality) {};
 
   ~SimplestChunk() override = default;
 
@@ -1310,11 +1321,14 @@ public:
 
   std::vector<std::string> GetContents() const { return contents; }
 
+  uint64_t GetEstimatedCardinality() const { return estimated_cardinality; }
+  void SetEstimatedCardinality(uint64_t card) { estimated_cardinality = card; }
+
   std::string Print(bool print = true) override {
     std::string str = "\n";
     str += "╔══════════════════╗\n";
 
-    str += "Chunk:\n";
+    str += "Chunk: " + std::to_string(GetTableIndex()) + "\n";
     for (const auto &content : contents) {
       str += content;
       str += ", ";
@@ -1333,6 +1347,7 @@ private:
   // todo: there might be other types
   unsigned int table_index;
   std::vector<std::string> contents;
+  uint64_t estimated_cardinality;
 };
 
 class SimplestHash : public SimplestStmt {

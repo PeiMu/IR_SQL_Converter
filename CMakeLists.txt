@@ -32,7 +32,7 @@ if(EXISTS ${DUCKDB_ROOT})
             NO_DEFAULT_PATH
     )
 else()
-    message(WARNING "DuckDB not found at ${LIBPG_QUERY_ROOT}")
+    message(WARNING "DuckDB not found at ${DUCKDB_ROOT}")
 endif()
 
 find_package(nlohmann_json REQUIRED)
@@ -40,6 +40,7 @@ find_package(nlohmann_json REQUIRED)
 add_library(IR_SQL_Converter SHARED
         src/cpp_interface.cpp
         src/duckdb_plan_to_ir.cpp
+        src/ir_to_duckdb_plan.cpp
         src/nodestr_to_ir.cpp
         src/parsetree_to_ir.cpp
         src/ir_to_sql.cpp
@@ -49,6 +50,7 @@ target_link_libraries(IR_SQL_Converter ${DUCKDB_LIB} ${LIBPG_QUERY_LIB} nlohmann
 add_library(IR_SQL_Converter_static STATIC
         src/cpp_interface.cpp
         src/duckdb_plan_to_ir.cpp
+        src/ir_to_duckdb_plan.cpp
         src/nodestr_to_ir.cpp
         src/parsetree_to_ir.cpp
         src/ir_to_sql.cpp
@@ -59,6 +61,7 @@ add_library(IR_SQL_Converter_C SHARED
         src/cpp_interface.cpp
         src/c_interface.cpp
         src/duckdb_plan_to_ir.cpp
+        src/ir_to_duckdb_plan.cpp
         src/nodestr_to_ir.cpp
         src/parsetree_to_ir.cpp
         src/ir_to_sql.cpp)
@@ -68,6 +71,7 @@ add_library(IR_SQL_Converter_C_static STATIC
         src/cpp_interface.cpp
         src/c_interface.cpp
         src/duckdb_plan_to_ir.cpp
+        src/ir_to_duckdb_plan.cpp
         src/nodestr_to_ir.cpp
         src/parsetree_to_ir.cpp
         src/ir_to_sql.cpp)

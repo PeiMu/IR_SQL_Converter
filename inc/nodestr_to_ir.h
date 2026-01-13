@@ -33,9 +33,6 @@ namespace ir_sql_converter {
 
 #define strtobool(x) ((*(x) == 't') ? true : false)
 
-using table_str =
-    std::unordered_map<std::string,
-                       std::vector<std::unique_ptr<SimplestLiteral>>>;
 using Oid = unsigned int;
 
 class NodestrToIR {

@@ -126,11 +126,13 @@ DuckToIR::ConstructSimplestProj(duckdb::LogicalProjection &proj_op,
   for (const auto &expr : proj_op.expressions) {
     auto table_expr = GetConstTableExpr(expr);
     // Resolve binding index to actual column index
-    auto actual_column_idx = ResolveColumnIndex(table_expr.table_idx, table_expr.column_idx);
+    auto actual_column_idx =
+        ResolveColumnIndex(table_expr.table_idx, table_expr.column_idx);
     // Get the correct column name from the base table schema
     std::string actual_column_name = table_expr.column_name;
     auto names_it = table_column_names_map.find(table_expr.table_idx);
-    if (names_it != table_column_names_map.end() && actual_column_idx < names_it->second.size()) {
+    if (names_it != table_column_names_map.end() &&
+        actual_column_idx < names_it->second.size()) {
       actual_column_name = names_it->second[actual_column_idx];
     }
     auto simplest_target = std::make_unique<SimplestAttr>(
@@ -359,11 +361,13 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
     auto left_type = ConvertVarType(left_cond->return_type);
     auto left_expr_info = GetConstTableExpr(left_cond);
     // Resolve binding index to actual column index
-    auto left_actual_col_idx = ResolveColumnIndex(left_expr_info.table_idx, left_expr_info.column_idx);
+    auto left_actual_col_idx =
+        ResolveColumnIndex(left_expr_info.table_idx, left_expr_info.column_idx);
     // Get the correct column name from the base table schema
     std::string left_actual_col_name = left_expr_info.column_name;
     auto left_names_it = table_column_names_map.find(left_expr_info.table_idx);
-    if (left_names_it != table_column_names_map.end() && left_actual_col_idx < left_names_it->second.size()) {
+    if (left_names_it != table_column_names_map.end() &&
+        left_actual_col_idx < left_names_it->second.size()) {
       left_actual_col_name = left_names_it->second[left_actual_col_idx];
     }
     auto left_simplest_cond = std::make_unique<SimplestAttr>(
@@ -373,11 +377,14 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
     auto right_type = ConvertVarType(right_cond->return_type);
     auto right_expr_info = GetConstTableExpr(right_cond);
     // Resolve binding index to actual column index
-    auto right_actual_col_idx = ResolveColumnIndex(right_expr_info.table_idx, right_expr_info.column_idx);
+    auto right_actual_col_idx = ResolveColumnIndex(right_expr_info.table_idx,
+                                                   right_expr_info.column_idx);
     // Get the correct column name from the base table schema
     std::string right_actual_col_name = right_expr_info.column_name;
-    auto right_names_it = table_column_names_map.find(right_expr_info.table_idx);
-    if (right_names_it != table_column_names_map.end() && right_actual_col_idx < right_names_it->second.size()) {
+    auto right_names_it =
+        table_column_names_map.find(right_expr_info.table_idx);
+    if (right_names_it != table_column_names_map.end() &&
+        right_actual_col_idx < right_names_it->second.size()) {
       right_actual_col_name = right_names_it->second[right_actual_col_idx];
     }
     auto right_simplest_cond = std::make_unique<SimplestAttr>(
@@ -422,8 +429,10 @@ std::unique_ptr<SimplestScan>
 DuckToIR::ConstructSimplestScan(duckdb::LogicalGet &get_op) {
   auto table_index = get_op.table_index;
 
+  uint64_t estimated_card = get_op.EstimateCardinality(context);
+
   // Store column_ids and column names mapping for this table
-  table_column_ids_map[table_index] = get_op.column_ids;
+  table_column_ids_map[table_index] = get_op.GetColumnIds();
   table_column_names_map[table_index] = get_op.names;
 
   // add target list
@@ -433,8 +442,9 @@ DuckToIR::ConstructSimplestScan(duckdb::LogicalGet &get_op) {
 #endif
   // Build target list using actual column indices from the base table
   // column_ids maps: column_ids[binding_idx] = base_table_column_idx
-  for (size_t binding_idx = 0; binding_idx < get_op.column_ids.size(); binding_idx++) {
-    auto column_id = get_op.column_ids[binding_idx];
+  for (size_t binding_idx = 0; binding_idx < get_op.GetColumnIds().size();
+       binding_idx++) {
+    auto column_id = get_op.GetColumnIds()[binding_idx].GetPrimaryIndex();
     if (column_id == duckdb::COLUMN_IDENTIFIER_ROW_ID) {
       continue; // Skip row ID column
     }
@@ -462,9 +472,10 @@ DuckToIR::ConstructSimplestScan(duckdb::LogicalGet &get_op) {
 
   auto base_stmt = std::make_unique<SimplestStmt>(
       std::move(target_list), std::move(qual_vec), SimplestNodeType::ScanNode);
-  auto table_name = get_op.function.to_string(get_op.bind_data.get());
-  auto simplest_scan = std::make_unique<SimplestScan>(std::move(base_stmt),
-                                                      table_index, table_name);
+  auto table_param_str = get_op.ParamsToString();
+  auto table_name = table_param_str["Table"];
+  auto simplest_scan = std::make_unique<SimplestScan>(
+      std::move(base_stmt), table_index, table_name, estimated_card);
   return simplest_scan;
 }
 
@@ -601,14 +612,16 @@ SimplestOrderType DuckToIR::ConvertOrderType(duckdb::OrderType type) {
   }
 }
 
-duckdb::column_t DuckToIR::ResolveColumnIndex(duckdb::idx_t table_idx, duckdb::idx_t binding_idx) {
+duckdb::column_t DuckToIR::ResolveColumnIndex(duckdb::idx_t table_idx,
+                                              duckdb::idx_t binding_idx) {
   auto it = table_column_ids_map.find(table_idx);
   if (it == table_column_ids_map.end() || binding_idx >= it->second.size()) {
-    // If mapping not found or binding_idx out of range, return binding_idx as-is
-    // This handles cases where the table might not be a LogicalGet (e.g., intermediate results)
+    // If mapping not found or binding_idx out of range, return binding_idx
+    // as-is This handles cases where the table might not be a LogicalGet (e.g.,
+    // intermediate results)
     return binding_idx;
   }
-  auto column_id = it->second[binding_idx];
+  auto column_id = it->second[binding_idx].GetPrimaryIndex();
   if (column_id == duckdb::COLUMN_IDENTIFIER_ROW_ID) {
     return binding_idx; // Return binding index for row ID
   }
@@ -619,12 +632,14 @@ std::unique_ptr<SimplestAttr>
 DuckToIR::ConvertAttr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
   duckdb::TableExpr table_expr = GetConstTableExpr(expr);
   // Resolve binding index to actual column index using column_ids mapping
-  auto actual_column_idx = ResolveColumnIndex(table_expr.table_idx, table_expr.column_idx);
+  auto actual_column_idx =
+      ResolveColumnIndex(table_expr.table_idx, table_expr.column_idx);
 
   // Get the correct column name from the base table schema
   std::string actual_column_name = table_expr.column_name;
   auto names_it = table_column_names_map.find(table_expr.table_idx);
-  if (names_it != table_column_names_map.end() && actual_column_idx < names_it->second.size()) {
+  if (names_it != table_column_names_map.end() &&
+      actual_column_idx < names_it->second.size()) {
     actual_column_name = names_it->second[actual_column_idx];
   }
 
@@ -756,6 +771,85 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
     }
     return left_simplest_expr;
   }
+  case duckdb::ExpressionType::COMPARE_BETWEEN: {
+    auto &between_expr = expr->Cast<duckdb::BoundBetweenExpression>();
+
+    // Convert input twice since we need it for both comparisons
+    auto input_attr1 = ConvertAttr(between_expr.input);
+#ifdef DEBUG
+    D_ASSERT(between_expr.lower->expression_class ==
+             ExpressionClass::BOUND_CONSTANT);
+#endif
+    auto &lower_expr =
+        between_expr.lower->Cast<duckdb::BoundConstantExpression>();
+    auto lower_attr = ConvertConstVar(lower_expr);
+#ifdef DEBUG
+    D_ASSERT(between_expr.upper->expression_class ==
+             ExpressionClass::BOUND_CONSTANT);
+#endif
+    auto &upper_expr =
+        between_expr.upper->Cast<duckdb::BoundConstantExpression>();
+    auto upper_attr = ConvertConstVar(upper_expr);
+
+    // input >= lower
+    auto lower_comp = std::make_unique<SimplestVarConstComparison>(
+        SimplestExprType::GreaterEqual, std::move(input_attr1),
+        std::move(lower_attr));
+
+    // Convert input again for the second comparison
+    auto input_attr2 = ConvertAttr(between_expr.input);
+
+    // input <= upper
+    auto upper_comp = std::make_unique<SimplestVarConstComparison>(
+        SimplestExprType::LessEqual, std::move(input_attr2),
+        std::move(upper_attr));
+
+    // Combine with AND
+    return std::make_unique<SimplestLogicalExpr>(
+        LogicalAnd, std::move(lower_comp), std::move(upper_comp));
+
+    //    // Convert expressions - need to call ConvertExpr twice for input
+    //    since we use it twice auto input_expr1 =
+    //    ConvertExpr(between_expr.input); auto lower_expr =
+    //    ConvertExpr(between_expr.lower); auto input_expr2 =
+    //    ConvertExpr(between_expr.input);  // Second copy for upper comparison
+    //    auto upper_expr = ConvertExpr(between_expr.upper);
+    //
+    //    // Downcast for first comparison: input >= lower
+    //    auto input_attr1 = std::unique_ptr<SimplestAttr>(
+    //        static_cast<SimplestAttr*>(input_expr1.release())
+    //    );
+    //    auto lower_const = std::unique_ptr<SimplestConstVar>(
+    //        static_cast<SimplestConstVar*>(lower_expr.release())
+    //    );
+    //
+    //    auto lower_comp = std::make_unique<SimplestVarConstComparison>(
+    //        SimplestExprType::GreaterEqual,
+    //        std::move(input_attr1),
+    //        std::move(lower_const)
+    //    );
+    //
+    //    // Downcast for second comparison: input <= upper
+    //    auto input_attr2 = std::unique_ptr<SimplestAttr>(
+    //        static_cast<SimplestAttr*>(input_expr2.release())
+    //    );
+    //    auto upper_const = std::unique_ptr<SimplestConstVar>(
+    //        static_cast<SimplestConstVar*>(upper_expr.release())
+    //    );
+    //
+    //    auto upper_comp = std::make_unique<SimplestVarConstComparison>(
+    //        SimplestExprType::LessEqual,
+    //        std::move(input_attr2),
+    //        std::move(upper_const)
+    //    );
+    //
+    //    // Combine with AND
+    //    return std::make_unique<SimplestLogicalExpr>(
+    //        LogicalAnd,
+    //        std::move(lower_comp),
+    //        std::move(upper_comp)
+    //    );
+  }
   case duckdb::ExpressionType::OPERATOR_IS_NULL:
   case duckdb::ExpressionType::OPERATOR_IS_NOT_NULL: {
     auto &operator_expr = expr->Cast<duckdb::BoundOperatorExpression>();
@@ -796,11 +890,13 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
   case duckdb::ExpressionType::BOUND_COLUMN_REF: {
     duckdb::TableExpr table_expr = GetConstTableExpr(expr);
     // Resolve binding index to actual column index
-    auto actual_column_idx = ResolveColumnIndex(table_expr.table_idx, table_expr.column_idx);
+    auto actual_column_idx =
+        ResolveColumnIndex(table_expr.table_idx, table_expr.column_idx);
     // Get the correct column name from the base table schema
     std::string actual_column_name = table_expr.column_name;
     auto names_it = table_column_names_map.find(table_expr.table_idx);
-    if (names_it != table_column_names_map.end() && actual_column_idx < names_it->second.size()) {
+    if (names_it != table_column_names_map.end() &&
+        actual_column_idx < names_it->second.size()) {
       actual_column_name = names_it->second[actual_column_idx];
     }
     auto simplest_attr = std::make_unique<SimplestAttr>(
