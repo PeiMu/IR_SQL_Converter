@@ -42,6 +42,11 @@
 
 #include <memory>
 
+// macro for cross engine,
+// e.g., the flow duckdb_plan -> ir -> postgres_plan and use it in the postgres
+// engine
+#define CROSS_ENGINE false
+
 namespace ir_sql_converter {
 class DuckToIR {
 public:
@@ -93,8 +98,11 @@ private:
   SimplestOrderType ConvertOrderType(duckdb::OrderType type);
   std::unique_ptr<SimplestAttr>
   ConvertAttr(const duckdb::unique_ptr<duckdb::Expression> &expr);
-  duckdb::column_t ResolveColumnIndex(duckdb::idx_t table_idx,
-                                      duckdb::idx_t binding_idx);
+  // map duckdb's specific column_ids and column names to the actual column
+  // index and column names
+  // we need to resolve the column idx mapping when cross different engines
+  duckdb::column_t ResolveDuckDBColumnIndex(duckdb::idx_t table_idx,
+                                            duckdb::idx_t binding_idx);
   std::unique_ptr<SimplestConstVar>
   ConvertConstVar(const duckdb::BoundConstantExpression &expr,
                   std::string prefix = "", const std::string &appendix = "");

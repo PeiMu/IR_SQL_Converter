@@ -43,6 +43,7 @@ int main(int argc, char **argv) {
     logical_plan->ResolveOperatorTypes();
 
     // print out logical plan
+    std::cout << "original duckdb plan:\n";
     logical_plan->Print();
     auto context = conn.context;
     auto planner = std::make_unique<Planner>(*context);
@@ -51,6 +52,7 @@ int main(int argc, char **argv) {
     auto simplest_ir = ir_sql_converter::ConvertDuckDBPlanToIR(
         *planner->binder, *context, logical_plan.get(), intermediate_table_map);
     // print out simplest ir
+    std::cout << "simplest ir converted from duckdb plan:\n";
     simplest_ir->Print();
 
     // test Simplest IR serialization/deserialization
@@ -59,11 +61,13 @@ int main(int argc, char **argv) {
     auto deserialized_simplest_ir =
         ir_sql_converter::LoadSimplestIRFromFile("test.ir");
     // print out simplest ir
+    std::cout << "deserialized simplest ir:\n";
     deserialized_simplest_ir->Print();
 
     auto duckdb_plan = ir_sql_converter::ConvertIRToDuckDBPlan(
         *planner->binder, *context, std::move(deserialized_simplest_ir));
     // print out DuckDB plan
+    std::cout << "duckdb plan converted from simplest ir:\n";
     duckdb_plan->Print();
 
     return 0;
