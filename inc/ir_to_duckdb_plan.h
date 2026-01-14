@@ -12,6 +12,7 @@
 
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
+#include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/common/enums/join_type.hpp"
 #include "duckdb/common/printer.hpp"
@@ -52,7 +53,7 @@ private:
   ConstructDuckdbJoin(const SimplestJoin &ir_join,
                       duckdb::unique_ptr<duckdb::LogicalOperator> left_child,
                       duckdb::unique_ptr<duckdb::LogicalOperator> right_child);
-  duckdb::unique_ptr<duckdb::LogicalGet>
+  duckdb::unique_ptr<duckdb::LogicalOperator>
   ConstructDuckdbScan(const SimplestScan &simplest_scan);
 
   duckdb::unique_ptr<duckdb::LogicalFilter>
@@ -88,6 +89,7 @@ private:
   duckdb::LogicalType ConvertVarType(SimplestVarType type);
   duckdb::OrderType ConvertOrderType(SimplestExprType type);
   std::string ConvertAggFnType(SimplestAggFnType type);
+  duckdb::JoinType ConvertJoinType(SimplestJoinType type);
 
   duckdb::Binder &binder;
   duckdb::ClientContext &context;

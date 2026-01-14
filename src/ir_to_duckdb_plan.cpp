@@ -6,8 +6,8 @@ duckdb::unique_ptr<duckdb::LogicalComparisonJoin> IRToDuck::ConstructDuckdbJoin(
     const SimplestJoin &ir_join,
     duckdb::unique_ptr<duckdb::LogicalOperator> left_child,
     duckdb::unique_ptr<duckdb::LogicalOperator> right_child) {
-  auto duckdb_join =
-      duckdb::make_uniq<duckdb::LogicalComparisonJoin>(duckdb::JoinType::INNER);
+  auto duckdb_join = duckdb::make_uniq<duckdb::LogicalComparisonJoin>(
+      ConvertJoinType(ir_join.GetSimplestJoinType()));
   duckdb_join->children.push_back(std::move(left_child));
   duckdb_join->children.push_back(std::move(right_child));
 
@@ -26,7 +26,7 @@ duckdb::unique_ptr<duckdb::LogicalComparisonJoin> IRToDuck::ConstructDuckdbJoin(
   return duckdb_join;
 }
 
-duckdb::unique_ptr<duckdb::LogicalGet>
+duckdb::unique_ptr<duckdb::LogicalOperator>
 IRToDuck::ConstructDuckdbScan(const SimplestScan &simplest_scan) {
   std::string table_name = simplest_scan.GetTableName();
   duckdb::idx_t ir_table_idx = simplest_scan.GetTableIndex();
@@ -53,10 +53,32 @@ IRToDuck::ConstructDuckdbScan(const SimplestScan &simplest_scan) {
   }
 
   // Create LogicalGet using IR's table index
-  return duckdb::make_uniq<duckdb::LogicalGet>(
-      ir_table_idx, // Use IR's index directly!
-      scan_function, std::move(bind_data), std::move(return_types),
-      std::move(return_names), duckdb::virtual_column_map_t());
+  auto scan_op = duckdb::make_uniq<duckdb::LogicalGet>(
+      ir_table_idx, scan_function, std::move(bind_data),
+      std::move(return_types), std::move(return_names),
+      duckdb::virtual_column_map_t());
+
+  // Set estimated cardinality
+  scan_op->estimated_cardinality = simplest_scan.GetEstimatedCardinality();
+
+  // fixme: check how duckdb has filter condition in scan node, now we wrap it
+  //  with a filter node
+
+  //  for (const auto &qual : simplest_scan.qual_vec) {
+  //    scan_op->expressions.push_back(ConstructDuckdbExpression(qual));
+  //  }
+  if (!simplest_scan.qual_vec.empty()) {
+    auto filter_op = duckdb::make_uniq<duckdb::LogicalFilter>();
+    for (const auto &qual : simplest_scan.qual_vec) {
+      filter_op->expressions.push_back(ConstructDuckdbExpression(qual));
+    }
+    filter_op->AddChild(std::move(scan_op));
+    return unique_ptr_cast<duckdb::LogicalFilter, duckdb::LogicalOperator>(
+        std::move(filter_op));
+  } else {
+    return unique_ptr_cast<duckdb::LogicalGet, duckdb::LogicalOperator>(
+        std::move(scan_op));
+  }
 }
 
 duckdb::unique_ptr<duckdb::LogicalFilter> IRToDuck::ConstructDuckdbFilter(
@@ -141,8 +163,11 @@ IRToDuck::ConstructDuckdbChunk(const SimplestChunk &simplest_chunk) {
   }
 
   // Create LogicalColumnDataGet
-  return duckdb::make_uniq<duckdb::LogicalColumnDataGet>(table_idx, chunk_types,
-                                                         std::move(collection));
+  auto chunk_get = duckdb::make_uniq<duckdb::LogicalColumnDataGet>(
+      table_idx, chunk_types, std::move(collection));
+  chunk_get->SetEstimatedCardinality(simplest_chunk.GetEstimatedCardinality());
+
+  return chunk_get;
 }
 
 duckdb::unique_ptr<duckdb::LogicalProjection>
@@ -173,11 +198,34 @@ duckdb::unique_ptr<duckdb::Expression> IRToDuck::ConstructDuckdbExpression(
   switch (simplest_expr->GetNodeType()) {
   case VarConstComparisonNode: {
     auto &comp = simplest_expr->Cast<SimplestVarConstComparison>();
-    auto left = ConstructDuckdbColumnRef(comp.attr);
-    auto right = ConstructDuckdbConstant(comp.const_var);
-    return duckdb::make_uniq<duckdb::BoundComparisonExpression>(
-        ConvertCompType(comp.GetSimplestExprType()), std::move(left),
-        std::move(right));
+    auto left_expr = ConstructDuckdbColumnRef(comp.attr);
+    auto right_expr = ConstructDuckdbConstant(comp.const_var);
+    if (comp.GetSimplestExprType() == SimplestExprType::TextLike ||
+        comp.GetSimplestExprType() == SimplestExprType::Text_Not_Like) {
+
+      // Get the LIKE function from catalog
+      auto &catalog = duckdb::Catalog::GetSystemCatalog(context);
+      std::string func_name =
+          (comp.GetSimplestExprType() == SimplestExprType::TextLike) ? "~~"
+                                                                     : "!~~";
+
+      auto &func_entry = catalog.GetEntry<duckdb::ScalarFunctionCatalogEntry>(
+          context, "", "", func_name);
+
+      // Create BoundFunctionExpression for LIKE
+      duckdb::vector<duckdb::unique_ptr<duckdb::Expression>> children;
+      children.push_back(std::move(left_expr));
+      children.push_back(std::move(right_expr));
+
+      return duckdb::make_uniq<duckdb::BoundFunctionExpression>(
+          duckdb::LogicalType::BOOLEAN,
+          func_entry.functions.GetFunctionByOffset(0), std::move(children),
+          nullptr);
+    } else {
+      return duckdb::make_uniq<duckdb::BoundComparisonExpression>(
+          ConvertCompType(comp.GetSimplestExprType()), std::move(left_expr),
+          std::move(right_expr));
+    }
   }
 
   case VarComparisonNode: {
@@ -388,10 +436,6 @@ duckdb::ExpressionType IRToDuck::ConvertCompType(SimplestExprType type) {
     return duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO;
   case NotEqual:
     return duckdb::ExpressionType::COMPARE_NOTEQUAL;
-  case TextLike:
-    return duckdb::ExpressionType::COMPARE_IN;
-  case Text_Not_Like:
-    return duckdb::ExpressionType::COMPARE_NOT_IN;
   default:
     std::cout << "Invalid postgres comparison type!" << std::endl;
     return duckdb::ExpressionType::INVALID;
@@ -442,4 +486,26 @@ duckdb::OrderType IRToDuck::ConvertOrderType(SimplestExprType type) {
     throw std::runtime_error("Unsupported order type: " + std::to_string(type));
   }
 }
+
+duckdb::JoinType IRToDuck::ConvertJoinType(SimplestJoinType type) {
+  switch (type) {
+  case SimplestJoinType::Inner:
+    return duckdb::JoinType::INNER;
+  case SimplestJoinType::Left:
+    return duckdb::JoinType::LEFT;
+  case SimplestJoinType::Right:
+    return duckdb::JoinType::RIGHT;
+  case SimplestJoinType::Full:
+    return duckdb::JoinType::OUTER;
+  case SimplestJoinType::Mark:
+    return duckdb::JoinType::MARK;
+  case SimplestJoinType::Semi:
+    return duckdb::JoinType::SEMI;
+  case SimplestJoinType::Anti:
+    return duckdb::JoinType::ANTI;
+  default:
+    throw std::runtime_error("Unsupported SimplestJoinType");
+  }
+}
+
 } // namespace ir_sql_converter

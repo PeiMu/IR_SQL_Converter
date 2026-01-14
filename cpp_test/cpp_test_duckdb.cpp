@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
     simplest_ir->Print();
 
     // test Simplest IR serialization/deserialization
-    ir_sql_converter::SaveSimplestIRToFile(std::move(simplest_ir), "test.ir");
+    ir_sql_converter::SaveSimplestIRToFile(simplest_ir, "test.ir");
 
     auto deserialized_simplest_ir =
         ir_sql_converter::LoadSimplestIRFromFile("test.ir");
@@ -65,7 +65,7 @@ int main(int argc, char **argv) {
     deserialized_simplest_ir->Print();
 
     auto duckdb_plan = ir_sql_converter::ConvertIRToDuckDBPlan(
-        *planner->binder, *context, std::move(deserialized_simplest_ir));
+        *planner->binder, *context, deserialized_simplest_ir);
     // print out DuckDB plan
     std::cout << "duckdb plan converted from simplest ir:\n";
     duckdb_plan->Print();
