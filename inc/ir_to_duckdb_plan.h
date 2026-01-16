@@ -91,8 +91,17 @@ private:
   std::string ConvertAggFnType(SimplestAggFnType type);
   duckdb::JoinType ConvertJoinType(SimplestJoinType type);
 
+  void
+  RegisterTableMapping(duckdb::idx_t table_idx,
+                       const duckdb::vector<duckdb::ColumnIndex> &column_ids);
+  duckdb::idx_t GetBindingIdx(duckdb::idx_t table_idx,
+                              duckdb::idx_t actual_column_id);
+
   duckdb::Binder &binder;
   duckdb::ClientContext &context;
+  std::unordered_map<duckdb::idx_t,
+                     std::unordered_map<duckdb::idx_t, duckdb::idx_t>>
+      actual_to_binding_map;
 };
 
 } // namespace ir_sql_converter

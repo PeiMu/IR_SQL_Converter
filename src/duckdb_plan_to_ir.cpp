@@ -125,21 +125,11 @@ DuckToIR::ConstructSimplestProj(duckdb::LogicalProjection &proj_op,
   std::vector<std::unique_ptr<SimplestAttr>> target_list;
   for (const auto &expr : proj_op.expressions) {
     auto table_expr = GetConstTableExpr(expr);
-#if CROSS_ENGINE
     // Resolve binding index to actual column index
     auto actual_column_idx =
-        ResolveColumnIndex(table_expr.table_idx, table_expr.column_idx);
+        ResolveDuckDBColumnIndex(table_expr.table_idx, table_expr.column_idx);
     // Get the correct column name from the base table schema
     std::string actual_column_name = table_expr.column_name;
-    auto names_it = table_column_names_map.find(table_expr.table_idx);
-    if (names_it != table_column_names_map.end() &&
-        actual_column_idx < names_it->second.size()) {
-      actual_column_name = names_it->second[actual_column_idx];
-    }
-#else
-    auto actual_column_idx = table_expr.column_idx;
-    auto actual_column_name = table_expr.column_name;
-#endif
     auto simplest_target = std::make_unique<SimplestAttr>(
         ConvertVarType(table_expr.return_type), table_expr.table_idx,
         actual_column_idx, actual_column_name);
@@ -173,10 +163,13 @@ DuckToIR::ConstructSimplestAggGroup(duckdb::LogicalAggregate &agg_group_op,
 #endif
     auto &column_ref_expr =
         group_expr->Cast<duckdb::BoundColumnRefExpression>();
+    auto actual_col_idx =
+        ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
+                                 column_ref_expr.binding.column_index);
     simplest_attr = std::make_unique<SimplestAttr>(
         ConvertVarType(column_ref_expr.return_type),
-        column_ref_expr.binding.table_index,
-        column_ref_expr.binding.column_index, column_ref_expr.alias);
+        column_ref_expr.binding.table_index, actual_col_idx,
+        column_ref_expr.alias);
     groups.emplace_back(std::move(simplest_attr));
   }
 
@@ -198,10 +191,13 @@ DuckToIR::ConstructSimplestAggGroup(duckdb::LogicalAggregate &agg_group_op,
       D_ASSERT(ExpressionType::BOUND_COLUMN_REF == expr->type);
 #endif
       auto &column_ref_expr = expr->Cast<duckdb::BoundColumnRefExpression>();
+      auto actual_col_idx =
+          ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
+                                   column_ref_expr.binding.column_index);
       simplest_attr = std::make_unique<SimplestAttr>(
           ConvertVarType(column_ref_expr.return_type),
-          column_ref_expr.binding.table_index,
-          column_ref_expr.binding.column_index, column_ref_expr.alias);
+          column_ref_expr.binding.table_index, actual_col_idx,
+          column_ref_expr.alias);
       agg_fns.emplace_back(std::make_pair(std::move(simplest_attr),
                                           ConvertAggFnType(agg_fn_type)));
     }
@@ -242,10 +238,13 @@ DuckToIR::ConstructSimplestOrderBy(duckdb::LogicalOrder &order_op,
 #endif
     auto &column_ref_expr =
         order.expression->Cast<duckdb::BoundColumnRefExpression>();
+    auto actual_col_idx =
+        ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
+                                 column_ref_expr.binding.column_index);
     simplest_attr = std::make_unique<SimplestAttr>(
         ConvertVarType(column_ref_expr.return_type),
-        column_ref_expr.binding.table_index,
-        column_ref_expr.binding.column_index, column_ref_expr.alias);
+        column_ref_expr.binding.table_index, actual_col_idx,
+        column_ref_expr.alias);
     order_struct.attr = std::move(simplest_attr);
     orders.emplace_back(std::move(order_struct));
   }
@@ -365,43 +364,22 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
     const auto &left_cond = cond.left;
     auto left_type = ConvertVarType(left_cond->return_type);
     auto left_expr_info = GetConstTableExpr(left_cond);
-#if CROSS_ENGINE
     // Resolve binding index to actual column index
-    auto left_actual_col_idx =
-        ResolveColumnIndex(left_expr_info.table_idx, left_expr_info.column_idx);
+    auto left_actual_col_idx = ResolveDuckDBColumnIndex(
+        left_expr_info.table_idx, left_expr_info.column_idx);
     // Get the correct column name from the base table schema
     std::string left_actual_col_name = left_expr_info.column_name;
-    auto left_names_it = table_column_names_map.find(left_expr_info.table_idx);
-    if (left_names_it != table_column_names_map.end() &&
-        left_actual_col_idx < left_names_it->second.size()) {
-      left_actual_col_name = left_names_it->second[left_actual_col_idx];
-    }
-#else
-    auto left_actual_col_idx = left_expr_info.column_idx;
-    auto left_actual_col_name = left_expr_info.column_name;
-#endif
     auto left_simplest_cond = std::make_unique<SimplestAttr>(
         left_type, left_expr_info.table_idx, left_actual_col_idx,
         left_actual_col_name);
     const auto &right_cond = cond.right;
     auto right_type = ConvertVarType(right_cond->return_type);
     auto right_expr_info = GetConstTableExpr(right_cond);
-#if CROSS_ENGINE
     // Resolve binding index to actual column index
-    auto right_actual_col_idx = ResolveColumnIndex(right_expr_info.table_idx,
-                                                   right_expr_info.column_idx);
+    auto right_actual_col_idx = ResolveDuckDBColumnIndex(
+        right_expr_info.table_idx, right_expr_info.column_idx);
     // Get the correct column name from the base table schema
     std::string right_actual_col_name = right_expr_info.column_name;
-    auto right_names_it =
-        table_column_names_map.find(right_expr_info.table_idx);
-    if (right_names_it != table_column_names_map.end() &&
-        right_actual_col_idx < right_names_it->second.size()) {
-      right_actual_col_name = right_names_it->second[right_actual_col_idx];
-    }
-#else
-    auto right_actual_col_idx = right_expr_info.column_idx;
-    auto right_actual_col_name = right_expr_info.column_name;
-#endif
     auto right_simplest_cond = std::make_unique<SimplestAttr>(
         right_type, right_expr_info.table_idx, right_actual_col_idx,
         right_actual_col_name);
@@ -448,42 +426,34 @@ DuckToIR::ConstructSimplestScan(duckdb::LogicalGet &get_op) {
 
   // Store column_ids and column names mapping for this table
   table_column_ids_map[table_index] = get_op.GetColumnIds();
-  table_column_names_map[table_index] = get_op.names;
 
   // add target list
   std::vector<std::unique_ptr<SimplestAttr>> target_list;
 #ifdef DEBUG
   get_op.names.size() == get_op.returned_types.size();
 #endif
-#if CROSS_ENGINE
   // Build target list using actual column indices from the base table
   // column_ids maps: column_ids[binding_idx] = base_table_column_idx
   for (size_t binding_idx = 0; binding_idx < get_op.GetColumnIds().size();
        binding_idx++) {
-    auto column_id = get_op.GetColumnIds()[binding_idx].GetPrimaryIndex();
-    if (column_id == duckdb::COLUMN_IDENTIFIER_ROW_ID) {
-      continue; // Skip row ID column
-    }
+    auto actual_column_id = ResolveDuckDBColumnIndex(table_index, binding_idx);
     // Store the base table column index (column_id) in SimplestAttr
     // This ensures the IR uses base table schema indices consistently
-#else
-  for (size_t column_id = 0; column_id < get_op.names.size(); column_id++) {
-#endif
     std::unique_ptr<SimplestAttr> simplest_attr =
         std::make_unique<SimplestAttr>(
-            ConvertVarType(get_op.returned_types[column_id]), table_index,
-            column_id, get_op.names[column_id]);
+            ConvertVarType(get_op.returned_types[actual_column_id]),
+            table_index, actual_column_id, get_op.names[actual_column_id]);
     target_list.emplace_back(std::move(simplest_attr));
   }
 
   // add qual vec
   std::vector<std::unique_ptr<SimplestExpr>> qual_vec;
   for (const auto &filter : get_op.table_filters.filters) {
-    auto column_index = filter.first;
+    auto actual_column_index = filter.first;
     auto &filter_cond = filter.second;
     auto simplest_var_attr = std::make_unique<SimplestAttr>(
-        ConvertVarType(get_op.returned_types[column_index]), table_index,
-        column_index, get_op.names[column_index]);
+        ConvertVarType(get_op.returned_types[actual_column_index]), table_index,
+        actual_column_index, get_op.names[actual_column_index]);
     auto simplest_scan_filter_expr =
         CollectScanFilter(filter_cond, std::move(simplest_var_attr));
     qual_vec.emplace_back(std::move(simplest_scan_filter_expr));
@@ -507,7 +477,7 @@ DuckToIR::ConstructSimplestScan(duckdb::LogicalColumnDataGet &get_op,
   std::vector<std::unique_ptr<SimplestExpr>> qual_vec;
 
   auto base_stmt = std::make_unique<SimplestStmt>(
-      std::move(target_list), std::move(qual_vec), SimplestNodeType::ScanNode);
+      std::move(target_list), std::move(qual_vec), SimplestNodeType::ChunkNode);
 
   auto table_index = get_op.table_index;
   auto simplest_scan = std::make_unique<SimplestScan>(
@@ -521,9 +491,19 @@ std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunk(
   std::vector<std::string> chunk_contents;
   duckdb::DataChunk chunk;
 
+  auto table_index = column_data_get_op.table_index;
+  uint64_t estimated_card = column_data_get_op.EstimateCardinality(context);
+
   column_data_get_op.collection->InitializeScanChunk(chunk);
   duckdb::ColumnDataScanState scan_state;
   column_data_get_op.collection->InitializeScan(scan_state);
+  duckdb::vector<duckdb::ColumnIndex> chunk_column_idx;
+  auto column_bindings = column_data_get_op.GetColumnBindings();
+  for (const auto &bind_pair : column_bindings) {
+    chunk_column_idx.emplace_back(duckdb::ColumnIndex(bind_pair.column_index));
+  }
+  table_column_ids_map[table_index] = chunk_column_idx;
+
   while (column_data_get_op.collection->Scan(scan_state, chunk)) {
     for (idx_t i = 0; i < chunk.ColumnCount(); i++) {
       for (idx_t j = 0; j < chunk.size(); j++) {
@@ -541,6 +521,7 @@ std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunk(
       std::move(target_list), std::move(qual_vec), SimplestNodeType::ScanNode);
   auto simplest_chunk = std::make_unique<SimplestChunk>(
       std::move(base_stmt), column_data_get_op.table_index, chunk_contents);
+  simplest_chunk->SetEstimatedCardinality(estimated_card);
   return simplest_chunk;
 }
 
@@ -632,16 +613,16 @@ SimplestOrderType DuckToIR::ConvertOrderType(duckdb::OrderType type) {
 }
 
 duckdb::column_t DuckToIR::ResolveDuckDBColumnIndex(duckdb::idx_t table_idx,
-                                              duckdb::idx_t binding_idx) {
+                                                    duckdb::idx_t binding_idx) {
   auto it = table_column_ids_map.find(table_idx);
   if (it == table_column_ids_map.end() || binding_idx >= it->second.size()) {
-    // If mapping not found or binding_idx out of range, return binding_idx
-    // as-is This handles cases where the table might not be a LogicalGet (e.g.,
-    // intermediate results)
-    return binding_idx;
+    std::runtime_error("Didn't find the column index mapping of (" +
+                       std::to_string(table_idx) + ", " +
+                       std::to_string(binding_idx) + ")");
   }
   auto column_id = it->second[binding_idx].GetPrimaryIndex();
   if (column_id == duckdb::COLUMN_IDENTIFIER_ROW_ID) {
+    std::cout << "warning: return COLUMN_IDENTIFIER_ROW_ID\n";
     return binding_idx; // Return binding index for row ID
   }
   return column_id;
@@ -650,22 +631,12 @@ duckdb::column_t DuckToIR::ResolveDuckDBColumnIndex(duckdb::idx_t table_idx,
 std::unique_ptr<SimplestAttr>
 DuckToIR::ConvertAttr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
   duckdb::TableExpr table_expr = GetConstTableExpr(expr);
-#if CROSS_ENGINE
   // Resolve binding index to actual column index using column_ids mapping
   auto actual_column_idx =
-      ResolveColumnIndex(table_expr.table_idx, table_expr.column_idx);
+      ResolveDuckDBColumnIndex(table_expr.table_idx, table_expr.column_idx);
 
   // Get the correct column name from the base table schema
   std::string actual_column_name = table_expr.column_name;
-  auto names_it = table_column_names_map.find(table_expr.table_idx);
-  if (names_it != table_column_names_map.end() &&
-      actual_column_idx < names_it->second.size()) {
-    actual_column_name = names_it->second[actual_column_idx];
-  }
-#else
-  auto actual_column_idx = table_expr.column_idx;
-  auto actual_column_name = table_expr.column_name;
-#endif
 
   auto simplest_attr = std::make_unique<SimplestAttr>(
       ConvertVarType(table_expr.return_type), table_expr.table_idx,
@@ -674,30 +645,43 @@ DuckToIR::ConvertAttr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
 }
 
 std::unique_ptr<SimplestConstVar>
-DuckToIR::ConvertConstVar(const duckdb::BoundConstantExpression &expr,
-                          std::string prefix, const std::string &appendix) {
+DuckToIR::ConvertConstVar(const duckdb::Value &value, const std::string &prefix,
+                          const std::string &appendix) {
   std::unique_ptr<SimplestConstVar> simplest_attr;
-  switch (expr.value.type().id()) {
-  case duckdb::LogicalTypeId::VARCHAR:
-  case duckdb::LogicalTypeId::DECIMAL:
-  case duckdb::LogicalTypeId::FLOAT:
-  case duckdb::LogicalTypeId::DOUBLE:
+
+  switch (value.type().id()) {
   case duckdb::LogicalTypeId::TINYINT:
   case duckdb::LogicalTypeId::SMALLINT:
   case duckdb::LogicalTypeId::INTEGER:
   case duckdb::LogicalTypeId::BIGINT: {
-    std::string str = std::move(prefix);
-    str += expr.value.ToString();
-    str += appendix;
+    int64_t int_val = value.GetValue<int64_t>();
+    simplest_attr =
+        std::make_unique<SimplestConstVar>(static_cast<int>(int_val));
+    break;
+  }
+  case duckdb::LogicalTypeId::FLOAT:
+  case duckdb::LogicalTypeId::DOUBLE:
+  case duckdb::LogicalTypeId::DECIMAL: {
+    double float_val = value.GetValue<double>();
+    simplest_attr =
+        std::make_unique<SimplestConstVar>(static_cast<float>(float_val));
+    break;
+  }
+  case duckdb::LogicalTypeId::VARCHAR: {
+    std::string str = prefix + value.ToString() + appendix;
     simplest_attr = std::make_unique<SimplestConstVar>(str);
     break;
   }
-  default:
-    duckdb::Printer::Print(duckdb::StringUtil::Format(
-        "Do not support yet, right_expr.value.type:  %s",
-        LogicalTypeIdToString(expr.value.type().id())));
-    D_ASSERT(false);
+  case duckdb::LogicalTypeId::BOOLEAN: {
+    bool bool_val = value.GetValue<bool>();
+    simplest_attr = std::make_unique<SimplestConstVar>(bool_val);
     break;
+  }
+  default:
+    duckdb::Printer::Print(
+        duckdb::StringUtil::Format("Do not support yet, value.type: %s",
+                                   LogicalTypeIdToString(value.type().id())));
+    D_ASSERT(false);
   }
   return simplest_attr;
 }
@@ -729,7 +713,7 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
         prefix_str = "%";
       }
       auto right_simplest_attr =
-          ConvertConstVar(right_expr, prefix_str, appendix_str);
+          ConvertConstVar(right_expr.value, prefix_str, appendix_str);
 
       auto simplest_var_const_comp =
           std::make_unique<SimplestVarConstComparison>(
@@ -772,7 +756,7 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
 #endif
     auto &right_expr =
         comparison_expr.right->Cast<duckdb::BoundConstantExpression>();
-    auto right_simplest_attr = ConvertConstVar(right_expr);
+    auto right_simplest_attr = ConvertConstVar(right_expr.value);
 
     auto simplest_var_const_comp = std::make_unique<SimplestVarConstComparison>(
         ConvertCompType(expr->type), std::move(left_simplest_attr),
@@ -806,14 +790,14 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
 #endif
     auto &lower_expr =
         between_expr.lower->Cast<duckdb::BoundConstantExpression>();
-    auto lower_attr = ConvertConstVar(lower_expr);
+    auto lower_attr = ConvertConstVar(lower_expr.value);
 #ifdef DEBUG
     D_ASSERT(between_expr.upper->expression_class ==
              ExpressionClass::BOUND_CONSTANT);
 #endif
     auto &upper_expr =
         between_expr.upper->Cast<duckdb::BoundConstantExpression>();
-    auto upper_attr = ConvertConstVar(upper_expr);
+    auto upper_attr = ConvertConstVar(upper_expr.value);
 
     // input >= lower
     auto lower_comp = std::make_unique<SimplestVarConstComparison>(
@@ -913,21 +897,11 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
   }
   case duckdb::ExpressionType::BOUND_COLUMN_REF: {
     duckdb::TableExpr table_expr = GetConstTableExpr(expr);
-#if CROSS_ENGINE
     // Resolve binding index to actual column index
     auto actual_column_idx =
-        ResolveColumnIndex(table_expr.table_idx, table_expr.column_idx);
+        ResolveDuckDBColumnIndex(table_expr.table_idx, table_expr.column_idx);
     // Get the correct column name from the base table schema
     std::string actual_column_name = table_expr.column_name;
-    auto names_it = table_column_names_map.find(table_expr.table_idx);
-    if (names_it != table_column_names_map.end() &&
-        actual_column_idx < names_it->second.size()) {
-      actual_column_name = names_it->second[actual_column_idx];
-    }
-#else
-    auto actual_column_idx = table_expr.column_idx;
-    auto actual_column_name = table_expr.column_name;
-#endif
     auto simplest_attr = std::make_unique<SimplestAttr>(
         ConvertVarType(table_expr.return_type), table_expr.table_idx,
         actual_column_idx, actual_column_name);
@@ -999,9 +973,8 @@ std::unique_ptr<SimplestExpr> DuckToIR::CollectScanFilter(
   }
   case duckdb::TableFilterType::CONSTANT_COMPARISON: {
     auto &constant_filter = filter_cond->Cast<duckdb::ConstantFilter>();
-    std::string constant_str = constant_filter.constant.ToString();
     auto simplest_comp_type = ConvertCompType(constant_filter.comparison_type);
-    auto simplest_const_var = std::make_unique<SimplestConstVar>(constant_str);
+    auto simplest_const_var = ConvertConstVar(constant_filter.constant);
     auto simplest_constant_comp = std::make_unique<SimplestVarConstComparison>(
         simplest_comp_type, std::make_unique<SimplestAttr>(*var_attr),
         std::move(simplest_const_var));

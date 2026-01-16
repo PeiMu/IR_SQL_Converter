@@ -61,6 +61,14 @@ IRToDuck::ConstructDuckdbScan(const SimplestScan &simplest_scan) {
   // Set estimated cardinality
   scan_op->estimated_cardinality = simplest_scan.GetEstimatedCardinality();
 
+  duckdb::vector<duckdb::ColumnIndex> column_ids;
+  for (duckdb::idx_t i = 0; i < table_entry->GetColumns().LogicalColumnCount();
+       i++) {
+    column_ids.push_back(duckdb::ColumnIndex(i));
+  }
+  scan_op->SetColumnIds(std::move(column_ids));
+  RegisterTableMapping(ir_table_idx, column_ids);
+
   // fixme: check how duckdb has filter condition in scan node, now we wrap it
   //  with a filter node
 
@@ -166,6 +174,11 @@ IRToDuck::ConstructDuckdbChunk(const SimplestChunk &simplest_chunk) {
   auto chunk_get = duckdb::make_uniq<duckdb::LogicalColumnDataGet>(
       table_idx, chunk_types, std::move(collection));
   chunk_get->SetEstimatedCardinality(simplest_chunk.GetEstimatedCardinality());
+  duckdb::vector<duckdb::ColumnIndex> column_ids;
+  for (duckdb::idx_t i = 0; i < chunk_types.size(); i++) {
+    column_ids.push_back(duckdb::ColumnIndex(i));
+  }
+  RegisterTableMapping(table_idx, column_ids);
 
   return chunk_get;
 }
@@ -285,12 +298,13 @@ duckdb::unique_ptr<duckdb::BoundColumnRefExpression>
 IRToDuck::ConstructDuckdbColumnRef(
     const std::unique_ptr<SimplestAttr> &simplest_attr) {
 
+  duckdb::idx_t table_idx = simplest_attr->GetTableIndex();
+  duckdb::idx_t actual_col_id = simplest_attr->GetColumnIndex();
+  duckdb::idx_t binding_idx = GetBindingIdx(table_idx, actual_col_id);
+
   return duckdb::make_uniq<duckdb::BoundColumnRefExpression>(
       simplest_attr->GetColumnName(), ConvertVarType(simplest_attr->GetType()),
-      duckdb::ColumnBinding(
-          simplest_attr->GetTableIndex(), // Use IR's table index directly
-          simplest_attr->GetColumnIndex() // Use IR's column index directly
-          ));
+      duckdb::ColumnBinding(table_idx, binding_idx));
 }
 
 duckdb::unique_ptr<duckdb::BoundConstantExpression>
@@ -506,6 +520,31 @@ duckdb::JoinType IRToDuck::ConvertJoinType(SimplestJoinType type) {
   default:
     throw std::runtime_error("Unsupported SimplestJoinType");
   }
+}
+
+void IRToDuck::RegisterTableMapping(
+    duckdb::idx_t table_idx,
+    const duckdb::vector<duckdb::ColumnIndex> &column_ids) {
+  std::unordered_map<duckdb::idx_t, duckdb::idx_t> mapping;
+  for (duckdb::idx_t binding_idx = 0; binding_idx < column_ids.size();
+       binding_idx++) {
+    duckdb::idx_t actual_col_id = column_ids[binding_idx].GetPrimaryIndex();
+    mapping[actual_col_id] = binding_idx;
+  }
+  actual_to_binding_map[table_idx] = mapping;
+}
+
+duckdb::idx_t IRToDuck::GetBindingIdx(duckdb::idx_t table_idx,
+                                      duckdb::idx_t actual_column_id) {
+  auto table_it = actual_to_binding_map.find(table_idx);
+  if (table_it == actual_to_binding_map.end()) {
+    return actual_column_id; // No mapping, assume identity
+  }
+  auto col_it = table_it->second.find(actual_column_id);
+  if (col_it == table_it->second.end()) {
+    return actual_column_id; // Not found, assume identity
+  }
+  return col_it->second;
 }
 
 } // namespace ir_sql_converter
