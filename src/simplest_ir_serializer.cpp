@@ -81,14 +81,14 @@ static std::unique_ptr<SimplestConstVar> DeserializeConstVar(std::istream &in) {
 
   switch (type) {
   case IntVar: {
-    int val;
+    int64_t val;
     in.read(reinterpret_cast<char *>(&val), sizeof(val));
-    return std::make_unique<SimplestConstVar>(val);
+    return std::make_unique<SimplestConstVar>(static_cast<int>(val));
   }
   case FloatVar: {
-    float val;
+    double val;
     in.read(reinterpret_cast<char *>(&val), sizeof(val));
-    return std::make_unique<SimplestConstVar>(val);
+    return std::make_unique<SimplestConstVar>(static_cast<float>(val));
   }
   case BoolVar: {
     bool val;
