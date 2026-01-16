@@ -13,6 +13,9 @@
 #include "ir_to_duckdb_plan.h"
 #include <iostream>
 
+#include "duckdb/common/serializer/binary_serializer.hpp"
+#include "duckdb/common/serializer/buffered_file_writer.hpp"
+
 using namespace duckdb;
 
 int main(int argc, char **argv) {
@@ -69,6 +72,18 @@ int main(int argc, char **argv) {
     // print out DuckDB plan
     std::cout << "duckdb plan converted from simplest ir:\n";
     duckdb_plan->Print();
+
+    // Serialize the logical plan to binary file
+    std::string filename = "/home/pei/Project/duckdb/measure/test.bin";
+
+    BufferedFileWriter writer(FileSystem::GetFileSystem(*context), filename);
+    BinarySerializer serializer(writer);
+
+    serializer.Begin();
+    duckdb_plan->Serialize(serializer);
+    serializer.End();
+
+    writer.Sync();
 
     return 0;
 
