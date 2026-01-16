@@ -336,6 +336,19 @@ IRToDuck::ConstructDuckdbConstant(
 duckdb::unique_ptr<duckdb::LogicalAggregate> IRToDuck::ConstructDuckdbAggregate(
     const SimplestAggregate &simplest_agg,
     duckdb::unique_ptr<duckdb::LogicalOperator> child) {
+  if (!simplest_agg.groups.empty()) {
+    duckdb::vector<duckdb::ColumnIndex> group_ids;
+    for (duckdb::idx_t i = 0; i < simplest_agg.groups.size(); i++) {
+      group_ids.push_back(duckdb::ColumnIndex(i));
+    }
+    RegisterTableMapping(simplest_agg.GetGroupIndex(), group_ids);
+  }
+  duckdb::vector<duckdb::ColumnIndex> agg_ids;
+  for (duckdb::idx_t i = 0; i < simplest_agg.agg_fns.size(); i++) {
+    agg_ids.push_back(duckdb::ColumnIndex(i));
+  }
+  RegisterTableMapping(simplest_agg.GetAggIndex(), agg_ids);
+
   // Convert agg_fns to DuckDB aggregate expressions
   duckdb::vector<duckdb::unique_ptr<duckdb::Expression>> agg_expressions;
   for (const auto &agg_fn : simplest_agg.agg_fns) {

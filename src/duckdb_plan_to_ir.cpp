@@ -157,6 +157,19 @@ DuckToIR::ConstructSimplestAggGroup(duckdb::LogicalAggregate &agg_group_op,
   // add table_expr of group by
   std::unique_ptr<SimplestAttr> simplest_attr;
   std::vector<std::unique_ptr<SimplestAttr>> groups;
+  if (!agg_group_op.groups.empty()) {
+    duckdb::vector<duckdb::ColumnIndex> group_ids;
+    for (duckdb::idx_t i = 0; i < agg_group_op.groups.size(); i++) {
+      group_ids.push_back(duckdb::ColumnIndex(i));
+    }
+    table_column_ids_map[agg_group_op.group_index] = group_ids;
+  }
+  duckdb::vector<duckdb::ColumnIndex> agg_ids;
+  for (duckdb::idx_t i = 0; i < agg_group_op.expressions.size(); i++) {
+    agg_ids.push_back(duckdb::ColumnIndex(i));
+  }
+  table_column_ids_map[agg_group_op.aggregate_index] = agg_ids;
+
   for (const auto &group_expr : agg_group_op.groups) {
 #ifdef DEBUG
     D_ASSERT(ExpressionType::BOUND_COLUMN_REF == group_expr->type);
