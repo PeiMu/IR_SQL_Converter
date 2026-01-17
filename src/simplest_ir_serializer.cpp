@@ -289,6 +289,10 @@ static void SerializeStmt(std::ostream &out, const SimplestStmt *stmt) {
     SimplestJoinType join_type = join.GetSimplestJoinType();
     out.write(reinterpret_cast<const char *>(&join_type), sizeof(join_type));
 
+    // Serialize mark_index (needed for Mark joins)
+    unsigned int mark_index = join.GetMarkIndex();
+    out.write(reinterpret_cast<const char *>(&mark_index), sizeof(mark_index));
+
     size_t join_cond_size = join.join_conditions.size();
     out.write(reinterpret_cast<const char *>(&join_cond_size),
               sizeof(join_cond_size));
@@ -446,6 +450,10 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
     SimplestJoinType join_type;
     in.read(reinterpret_cast<char *>(&join_type), sizeof(join_type));
 
+    // Deserialize mark_index (needed for Mark joins)
+    unsigned int mark_index;
+    in.read(reinterpret_cast<char *>(&mark_index), sizeof(mark_index));
+
     size_t join_cond_size;
     in.read(reinterpret_cast<char *>(&join_cond_size), sizeof(join_cond_size));
     std::vector<std::unique_ptr<SimplestVarComparison>> join_conditions;
@@ -465,6 +473,7 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
     // Create Join from base_stmt
     auto join = std::make_unique<SimplestJoin>(
         std::move(base_stmt), std::move(join_conditions), join_type);
+    join->SetMarkIndex(mark_index);
     return join;
   }
   case FilterNode: {

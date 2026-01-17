@@ -1138,6 +1138,9 @@ public:
 
   void SetJoinType(SimplestJoinType type) { join_type = type; }
 
+  unsigned int GetMarkIndex() const { return mark_index; }
+  void SetMarkIndex(unsigned int idx) { mark_index = idx; }
+
   std::string Print(bool print = true) override {
     std::string str = "\n";
     str += "╔══════════════════╗\n";
@@ -1195,6 +1198,7 @@ public:
 
 private:
   SimplestJoinType join_type;
+  unsigned int mark_index{};
 };
 
 class SimplestCrossProduct : public SimplestStmt {

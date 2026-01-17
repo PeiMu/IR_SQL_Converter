@@ -23,6 +23,15 @@ duckdb::unique_ptr<duckdb::LogicalComparisonJoin> IRToDuck::ConstructDuckdbJoin(
     duckdb_join->conditions.push_back(std::move(cond));
   }
 
+  if (ir_join.GetSimplestJoinType() == SimplestJoinType::Mark) {
+    duckdb_join->mark_index = ir_join.GetMarkIndex();
+
+    // Register mark_index binding
+    duckdb::vector<duckdb::ColumnIndex> mark_ids;
+    mark_ids.push_back(duckdb::ColumnIndex(0));
+    RegisterTableMapping(ir_join.GetMarkIndex(), mark_ids);
+  }
+
   return duckdb_join;
 }
 

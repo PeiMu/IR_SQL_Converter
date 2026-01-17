@@ -408,6 +408,15 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
   auto simplest_join = std::make_unique<SimplestJoin>(
       std::move(base_stmt), std::move(join_conditions), join_type);
 
+  if (join_op.join_type == duckdb::JoinType::MARK) {
+    simplest_join->SetMarkIndex(join_op.mark_index);
+
+    // Register mark_index output binding (single boolean column)
+    duckdb::vector<duckdb::ColumnIndex> mark_ids;
+    mark_ids.push_back(duckdb::ColumnIndex(0));
+    table_column_ids_map[join_op.mark_index] = mark_ids;
+  }
+
   return simplest_join;
 }
 
