@@ -363,22 +363,31 @@ duckdb::unique_ptr<duckdb::LogicalAggregate> IRToDuck::ConstructDuckdbAggregate(
   for (const auto &agg_fn : simplest_agg.agg_fns) {
     std::string agg_fn_name = ConvertAggFnType(agg_fn.second);
 
+    // First create column ref to get the argument type
+    auto col_ref = ConstructDuckdbColumnRef(agg_fn.first);
+    duckdb::vector<duckdb::LogicalType> arg_types;
+    arg_types.push_back(col_ref->return_type);
+
     // Get aggregate function from catalog
     auto &catalog = duckdb::Catalog::GetSystemCatalog(context);
     auto &func_catalog =
         catalog.GetEntry<duckdb::AggregateFunctionCatalogEntry>(context, "", "",
                                                                 agg_fn_name);
 
-    // Create aggregate function expression
-    auto agg_expr = duckdb::make_uniq<duckdb::BoundAggregateExpression>(
-        func_catalog.functions.GetFunctionByOffset(0),
-        duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>(),
-        duckdb::unique_ptr<duckdb::Expression>(), nullptr,
-        duckdb::AggregateType::NON_DISTINCT);
+    // Find the function overload that matches the argument types
+    auto matched_func =
+        func_catalog.functions.GetFunctionByArguments(context, arg_types);
 
-    // Add column ref as child of aggregate
-    agg_expr->children.push_back(ConstructDuckdbColumnRef(agg_fn.first));
-    agg_expr->return_type = ConvertVarType(agg_fn.first->GetType());
+    // Create children vector with the column ref
+    duckdb::vector<duckdb::unique_ptr<duckdb::Expression>> children;
+    children.push_back(std::move(col_ref));
+
+    // Use FunctionBinder to properly bind the aggregate function
+    // This handles setting return_type correctly for polymorphic functions
+    duckdb::FunctionBinder function_binder(context);
+    auto agg_expr = function_binder.BindAggregateFunction(
+        matched_func, std::move(children), nullptr,
+        duckdb::AggregateType::NON_DISTINCT);
 
     agg_expressions.push_back(std::move(agg_expr));
   }

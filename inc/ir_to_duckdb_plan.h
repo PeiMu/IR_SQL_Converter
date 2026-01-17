@@ -16,6 +16,7 @@
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/common/enums/join_type.hpp"
 #include "duckdb/common/printer.hpp"
+#include "duckdb/function/function_binder.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/optimizer/query_split/split_algorithm.hpp"
 #include "duckdb/planner/binder.hpp"
