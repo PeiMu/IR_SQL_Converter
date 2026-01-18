@@ -148,9 +148,19 @@ IRToDuck::ConstructDuckdbChunk(const SimplestChunk &simplest_chunk) {
   auto contents = simplest_chunk.GetContents();
   duckdb::idx_t table_idx = simplest_chunk.GetTableIndex();
 
-  // Create types for single VARCHAR column
-  duckdb::vector<duckdb::LogicalType> chunk_types = {
-      duckdb::LogicalType::VARCHAR};
+  // fixme: didn't get the correct target_list
+  // Get column types from target_list
+  duckdb::vector<duckdb::LogicalType> chunk_types;
+  std::cout << "simplest_chunk.target_list.size()="
+            << simplest_chunk.target_list.size() << "\n";
+  for (const auto &attr : simplest_chunk.target_list) {
+    chunk_types.push_back(ConvertVarType(attr->GetType()));
+  }
+
+  // Fallback to single VARCHAR if no target_list (legacy IN-clause case)
+  if (chunk_types.empty()) {
+    chunk_types.push_back(duckdb::LogicalType::VARCHAR);
+  }
 
   // Create ColumnDataCollection
   auto collection =
@@ -162,9 +172,37 @@ IRToDuck::ConstructDuckdbChunk(const SimplestChunk &simplest_chunk) {
   duckdb::DataChunk output;
   output.Initialize(duckdb::Allocator::Get(context), chunk_types);
 
-  // Add each string value as a row
-  for (duckdb::idx_t i = 0; i < contents.size(); i++) {
-    output.SetValue(0, output.size(), duckdb::Value(contents[i]));
+  // Calculate row count (contents stored column-by-column)
+  duckdb::idx_t num_columns = chunk_types.size();
+  duckdb::idx_t num_rows = num_columns > 0 ? contents.size() / num_columns : 0;
+
+  // fixme: should be column-by-column?
+  // Add values row by row
+  for (duckdb::idx_t row = 0; row < num_rows; row++) {
+    for (duckdb::idx_t col = 0; col < num_columns; col++) {
+      duckdb::idx_t content_idx = col * num_rows + row;
+      std::string &val_str = contents[content_idx];
+
+      // Convert string to appropriate type
+      duckdb::Value val;
+      switch (chunk_types[col].id()) {
+      case duckdb::LogicalTypeId::INTEGER:
+        val = duckdb::Value::INTEGER(std::stoi(val_str));
+        break;
+      case duckdb::LogicalTypeId::FLOAT:
+      case duckdb::LogicalTypeId::DOUBLE:
+        val = duckdb::Value::DOUBLE(std::stod(val_str));
+        break;
+      case duckdb::LogicalTypeId::BOOLEAN:
+        val = duckdb::Value::BOOLEAN(val_str == "true" || val_str == "1");
+        break;
+      case duckdb::LogicalTypeId::VARCHAR:
+      default:
+        val = duckdb::Value(val_str);
+        break;
+      }
+      output.SetValue(col, output.size(), val);
+    }
     output.SetCardinality(output.size() + 1);
 
     // Flush chunk when full
@@ -183,6 +221,8 @@ IRToDuck::ConstructDuckdbChunk(const SimplestChunk &simplest_chunk) {
   auto chunk_get = duckdb::make_uniq<duckdb::LogicalColumnDataGet>(
       table_idx, chunk_types, std::move(collection));
   chunk_get->SetEstimatedCardinality(simplest_chunk.GetEstimatedCardinality());
+
+  // Register column mapping
   duckdb::vector<duckdb::ColumnIndex> column_ids;
   for (duckdb::idx_t i = 0; i < chunk_types.size(); i++) {
     column_ids.push_back(duckdb::ColumnIndex(i));
@@ -190,6 +230,46 @@ IRToDuck::ConstructDuckdbChunk(const SimplestChunk &simplest_chunk) {
   RegisterTableMapping(table_idx, column_ids);
 
   return chunk_get;
+}
+
+duckdb::unique_ptr<duckdb::LogicalColumnDataGet>
+IRToDuck::ConstructDuckdbColumnDataGet(const SimplestChunk &simplest_chunk) {
+  auto contents = simplest_chunk.GetContents();
+  duckdb::idx_t table_idx = simplest_chunk.GetTableIndex();
+
+  if (contents.empty()) {
+    // Intermediate result placeholder - get data from intermediate_results map
+    if (!intermediate_results ||
+        intermediate_results->find(table_idx) == intermediate_results->end()) {
+      throw std::runtime_error(
+          "Missing intermediate result for table_index " +
+          std::to_string(table_idx) +
+          ". Ensure previous subplan results are provided.");
+    }
+
+    auto &collection = (*intermediate_results)[table_idx];
+    auto types = collection->Types();
+
+    // Move the collection out of the map (each intermediate result is used
+    // once)
+    auto chunk_get = duckdb::make_uniq<duckdb::LogicalColumnDataGet>(
+        table_idx, types, std::move(collection));
+    chunk_get->SetEstimatedCardinality(
+        simplest_chunk.GetEstimatedCardinality());
+
+    // Register column mapping (identity for intermediate results)
+    duckdb::vector<duckdb::ColumnIndex> column_ids;
+    for (duckdb::idx_t i = 0; i < types.size(); i++) {
+      column_ids.push_back(duckdb::ColumnIndex(i));
+    }
+    RegisterTableMapping(table_idx, column_ids);
+
+    return chunk_get;
+  } else {
+    // Embedded data (IN-clause or cross-engine intermediate result)
+    // Use existing ConstructDuckdbChunk logic
+    return ConstructDuckdbChunk(simplest_chunk);
+  }
 }
 
 duckdb::unique_ptr<duckdb::LogicalProjection>
@@ -447,7 +527,10 @@ duckdb::unique_ptr<duckdb::LogicalOperator> IRToDuck::ConstructDuckdbPlan(
 
   case ChunkNode: {
     auto &simplest_chunk = simplest_ir->Cast<SimplestChunk>();
-    return ConstructDuckdbChunk(simplest_chunk);
+    // Use ConstructDuckdbColumnDataGet which handles both:
+    // - Embedded data (IN-clause or cross-engine intermediate result)
+    // - Placeholder (same-engine intermediate result, data from map)
+    return ConstructDuckdbColumnDataGet(simplest_chunk);
   }
 
   case ProjectionNode: {

@@ -5,12 +5,13 @@
 namespace ir_sql_converter {
 std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
     duckdb::LogicalOperator *duckdb_plan_pointer,
-    const std::unordered_map<unsigned int, std::string>
-        &intermediate_table_map) {
+    const std::unordered_map<unsigned int, std::string> &intermediate_table_map,
+    bool embed_intermediate_data) {
   std::function<std::unique_ptr<SimplestStmt>(duckdb::LogicalOperator *
                                               duckdb_plan_pointer)>
       iterate_plan;
-  iterate_plan = [&iterate_plan, intermediate_table_map,
+  iterate_plan = [&iterate_plan, &intermediate_table_map,
+                  embed_intermediate_data,
                   this](duckdb::LogicalOperator *duckdb_plan_pointer)
       -> std::unique_ptr<SimplestStmt> {
     std::unique_ptr<SimplestStmt> left_child, right_child;
@@ -84,12 +85,25 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
       auto find_intermediate_table =
           intermediate_table_map.find(column_data_get_op.table_index);
       if (find_intermediate_table != intermediate_table_map.end()) {
-        auto simplest_scan = ConstructSimplestScan(
-            column_data_get_op, find_intermediate_table->second);
-        return unique_ptr_cast<SimplestScan, SimplestStmt>(
-            std::move(simplest_scan));
+        // Intermediate result from previous subplan
+        if (embed_intermediate_data) {
+          std::cout << "cross engine\n";
+          // Cross-engine: embed actual data in SimplestChunk
+          auto simplest_chunk = ConstructSimplestChunk(column_data_get_op);
+          return unique_ptr_cast<SimplestChunk, SimplestStmt>(
+              std::move(simplest_chunk));
+        } else {
+          std::cout << "same engine\n";
+          // Same-engine: create SimplestChunk with empty contents
+          // The engine will provide the data at execution time
+          auto simplest_chunk =
+              ConstructSimplestChunkPlaceholder(column_data_get_op);
+          return unique_ptr_cast<SimplestChunk, SimplestStmt>(
+              std::move(simplest_chunk));
+        }
       } else {
-        // it might be an `IN` clause
+        std::cout << "embed data\n";
+        // IN-clause constant list - always embed data
         auto simplest_chunk = ConstructSimplestChunk(column_data_get_op);
         return unique_ptr_cast<SimplestChunk, SimplestStmt>(
             std::move(simplest_chunk));
@@ -509,7 +523,6 @@ DuckToIR::ConstructSimplestScan(duckdb::LogicalColumnDataGet &get_op,
 
 std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunk(
     duckdb::LogicalColumnDataGet &column_data_get_op) {
-  // fixme: might have other types
   std::vector<std::string> chunk_contents;
   duckdb::DataChunk chunk;
 
@@ -534,15 +547,59 @@ std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunk(
     }
   }
 
-  // todo: add target list
+  // Build target_list with column type info (needed to reconstruct schema)
   std::vector<std::unique_ptr<SimplestAttr>> target_list;
+  auto &types = column_data_get_op.types;
+  for (size_t i = 0; i < types.size(); i++) {
+    auto simplest_attr = std::make_unique<SimplestAttr>(
+        ConvertVarType(types[i]), table_index, i, "col" + std::to_string(i));
+    target_list.emplace_back(std::move(simplest_attr));
+  }
+  std::cout << "target_list.size()=" << target_list.size() << "\n";
+
   // todo: add qual vec
   std::vector<std::unique_ptr<SimplestExpr>> qual_vec;
 
   auto base_stmt = std::make_unique<SimplestStmt>(
-      std::move(target_list), std::move(qual_vec), SimplestNodeType::ScanNode);
+      std::move(target_list), std::move(qual_vec), SimplestNodeType::ChunkNode);
   auto simplest_chunk = std::make_unique<SimplestChunk>(
       std::move(base_stmt), column_data_get_op.table_index, chunk_contents);
+  simplest_chunk->SetEstimatedCardinality(estimated_card);
+  return simplest_chunk;
+}
+
+std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunkPlaceholder(
+    duckdb::LogicalColumnDataGet &column_data_get_op) {
+  // Create a placeholder SimplestChunk for intermediate results (same-engine)
+  // Contents are empty, but target_list has column type info for reconstruction
+  auto table_index = column_data_get_op.table_index;
+  uint64_t estimated_card = column_data_get_op.EstimateCardinality(context);
+
+  // Register column mapping
+  duckdb::vector<duckdb::ColumnIndex> chunk_column_idx;
+  auto column_bindings = column_data_get_op.GetColumnBindings();
+  for (const auto &bind_pair : column_bindings) {
+    chunk_column_idx.emplace_back(duckdb::ColumnIndex(bind_pair.column_index));
+  }
+  table_column_ids_map[table_index] = chunk_column_idx;
+
+  // Build target_list with column type info (needed to reconstruct schema)
+  std::vector<std::unique_ptr<SimplestAttr>> target_list;
+  auto &types = column_data_get_op.types;
+  for (size_t i = 0; i < types.size(); i++) {
+    auto simplest_attr = std::make_unique<SimplestAttr>(
+        ConvertVarType(types[i]), table_index, i, "col" + std::to_string(i));
+    target_list.emplace_back(std::move(simplest_attr));
+  }
+
+  // Empty contents - data will be provided at execution time
+  std::vector<std::string> empty_contents;
+  std::vector<std::unique_ptr<SimplestExpr>> qual_vec;
+
+  auto base_stmt = std::make_unique<SimplestStmt>(
+      std::move(target_list), std::move(qual_vec), SimplestNodeType::ChunkNode);
+  auto simplest_chunk = std::make_unique<SimplestChunk>(
+      std::move(base_stmt), table_index, empty_contents);
   simplest_chunk->SetEstimatedCardinality(estimated_card);
   return simplest_chunk;
 }

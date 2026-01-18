@@ -1333,11 +1333,19 @@ public:
     str += "╔══════════════════╗\n";
 
     str += "Chunk: " + std::to_string(GetTableIndex()) + "\n";
-    for (const auto &content : contents) {
-      str += content;
-      str += ", ";
+    if (contents.size() > 10) {
+      for (size_t i = 0; i < 10; i++) {
+        str += contents[i];
+        str += ", ";
+      }
+      str += "...";
+    } else {
+      for (const auto &content : contents) {
+        str += content;
+        str += ", ";
+      }
+      str.erase(str.size() - 2);
     }
-    str.erase(str.size() - 2);
 
     str += "\n╚══════════════════╝\n";
 

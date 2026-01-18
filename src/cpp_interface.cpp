@@ -52,21 +52,24 @@ std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const json &parse_tree,
   return converter.Convert(parse_tree, sub_plan_id);
 }
 
-std::unique_ptr<SimplestStmt>
-ConvertDuckDBPlanToIR(duckdb::Binder &binder, duckdb::ClientContext &context,
-                      duckdb::LogicalOperator *duckdb_plan_pointer,
-                      const std::unordered_map<unsigned int, std::string>
-                          &intermediate_table_map) {
+std::unique_ptr<SimplestStmt> ConvertDuckDBPlanToIR(
+    duckdb::Binder &binder, duckdb::ClientContext &context,
+    duckdb::LogicalOperator *duckdb_plan_pointer,
+    const std::unordered_map<unsigned int, std::string> &intermediate_table_map,
+    bool embed_intermediate_data) {
   ir_sql_converter::DuckToIR converter(binder, context);
-  auto ir = converter.ConstructSimplestStmt(duckdb_plan_pointer,
-                                            intermediate_table_map);
+  auto ir = converter.ConstructSimplestStmt(
+      duckdb_plan_pointer, intermediate_table_map, embed_intermediate_data);
   return std::move(ir);
 }
 
-duckdb::unique_ptr<duckdb::LogicalOperator>
-ConvertIRToDuckDBPlan(duckdb::Binder &binder, duckdb::ClientContext &context,
-                      const std::unique_ptr<SimplestStmt> &simplest_ir) {
-  ir_sql_converter::IRToDuck converter(binder, context);
+duckdb::unique_ptr<duckdb::LogicalOperator> ConvertIRToDuckDBPlan(
+    duckdb::Binder &binder, duckdb::ClientContext &context,
+    const std::unique_ptr<SimplestStmt> &simplest_ir,
+    std::unordered_map<duckdb::idx_t,
+                       duckdb::unique_ptr<duckdb::ColumnDataCollection>>
+        *intermediate_results) {
+  ir_sql_converter::IRToDuck converter(binder, context, intermediate_results);
   auto duckdb_plan = converter.ConstructDuckdbPlan(simplest_ir);
   return std::move(duckdb_plan);
 }

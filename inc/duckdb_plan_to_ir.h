@@ -52,7 +52,8 @@ public:
   std::unique_ptr<SimplestStmt>
   ConstructSimplestStmt(duckdb::LogicalOperator *duckdb_plan_pointer,
                         const std::unordered_map<unsigned int, std::string>
-                            &intermediate_table_map);
+                            &intermediate_table_map,
+                        bool embed_intermediate_data = false);
 
 private:
   std::unique_ptr<SimplestProjection>
@@ -72,6 +73,10 @@ private:
                         const std::string &intermediate_table_name);
   std::unique_ptr<SimplestChunk>
   ConstructSimplestChunk(duckdb::LogicalColumnDataGet &column_data_get_op);
+  // Create a placeholder SimplestChunk for intermediate results (same-engine)
+  // Contents are empty, but target_list has column type info
+  std::unique_ptr<SimplestChunk> ConstructSimplestChunkPlaceholder(
+      duckdb::LogicalColumnDataGet &column_data_get_op);
   std::unique_ptr<SimplestCrossProduct>
   ConstructSimplestCrossProduct(duckdb::LogicalCrossProduct &cross_product_op,
                                 std::unique_ptr<SimplestStmt> left_child,

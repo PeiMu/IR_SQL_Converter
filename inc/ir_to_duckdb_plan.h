@@ -16,8 +16,11 @@
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/common/enums/join_type.hpp"
 #include "duckdb/common/printer.hpp"
-#include "duckdb/function/function_binder.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
+#include "duckdb/function/function_binder.hpp"
+#include "duckdb/main/materialized_query_result.hpp"
+#include "duckdb/main/query_result.hpp"
+#include "duckdb/main/stream_query_result.hpp"
 #include "duckdb/optimizer/query_split/split_algorithm.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/bound_result_modifier.hpp"
@@ -42,8 +45,12 @@ namespace ir_sql_converter {
 
 class IRToDuck {
 public:
-  IRToDuck(duckdb::Binder &binder, duckdb::ClientContext &context)
-      : binder(binder), context(context) {};
+  IRToDuck(duckdb::Binder &binder, duckdb::ClientContext &context,
+           std::unordered_map<duckdb::idx_t,
+                              duckdb::unique_ptr<duckdb::ColumnDataCollection>>
+               *intermediate_results = nullptr)
+      : binder(binder), context(context),
+        intermediate_results(intermediate_results) {};
   ~IRToDuck() = default;
 
   duckdb::unique_ptr<duckdb::LogicalOperator>
@@ -67,6 +74,11 @@ private:
 
   duckdb::unique_ptr<duckdb::LogicalColumnDataGet>
   ConstructDuckdbChunk(const SimplestChunk &simplest_chunk);
+
+  // Construct LogicalColumnDataGet from SimplestChunk
+  // Handles both: embedded data (cross-engine) and placeholder (same-engine)
+  duckdb::unique_ptr<duckdb::LogicalColumnDataGet>
+  ConstructDuckdbColumnDataGet(const SimplestChunk &simplest_chunk);
 
   duckdb::unique_ptr<duckdb::LogicalProjection>
   ConstructDuckdbProjection(const SimplestProjection &simplest_projection,
@@ -103,6 +115,10 @@ private:
   std::unordered_map<duckdb::idx_t,
                      std::unordered_map<duckdb::idx_t, duckdb::idx_t>>
       actual_to_binding_map;
+  // Intermediate results from previous subplans (same-engine execution)
+  std::unordered_map<duckdb::idx_t,
+                     duckdb::unique_ptr<duckdb::ColumnDataCollection>>
+      *intermediate_results;
 };
 
 } // namespace ir_sql_converter

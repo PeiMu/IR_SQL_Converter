@@ -19,15 +19,18 @@ std::unique_ptr<SimplestStmt> ConvertNodeStrToIR(const std::string &nodestr,
 std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const json &parse_tree,
                                                    unsigned int sub_plan_id);
 
-std::unique_ptr<SimplestStmt>
-ConvertDuckDBPlanToIR(duckdb::Binder &binder, duckdb::ClientContext &context,
-                      duckdb::LogicalOperator *duckdb_plan_pointer,
-                      const std::unordered_map<unsigned int, std::string>
-                          &intermediate_table_map);
+std::unique_ptr<SimplestStmt> ConvertDuckDBPlanToIR(
+    duckdb::Binder &binder, duckdb::ClientContext &context,
+    duckdb::LogicalOperator *duckdb_plan_pointer,
+    const std::unordered_map<unsigned int, std::string> &intermediate_table_map,
+    bool embed_intermediate_data = false);
 
-duckdb::unique_ptr<duckdb::LogicalOperator>
-ConvertIRToDuckDBPlan(duckdb::Binder &binder, duckdb::ClientContext &context,
-                      const std::unique_ptr<SimplestStmt> &simplest_ir);
+duckdb::unique_ptr<duckdb::LogicalOperator> ConvertIRToDuckDBPlan(
+    duckdb::Binder &binder, duckdb::ClientContext &context,
+    const std::unique_ptr<SimplestStmt> &simplest_ir,
+    std::unordered_map<duckdb::idx_t,
+                       duckdb::unique_ptr<duckdb::ColumnDataCollection>>
+        *intermediate_results = nullptr);
 
 std::string ConvertIRToSQL(SimplestStmt &simplest_stmt, size_t query_id,
                            bool save_file = false,
