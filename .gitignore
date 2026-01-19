@@ -49,6 +49,7 @@ lib*.pc
 /cmake-build-debug
 /build_duckdb_010/
 /build_duckdb_132/
+/build_duckdb_061/
 
 *.sql
 

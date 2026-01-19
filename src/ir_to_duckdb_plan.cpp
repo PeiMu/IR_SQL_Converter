@@ -75,7 +75,13 @@ IRToDuck::ConstructDuckdbScan(const SimplestScan &simplest_scan) {
     column_ids.push_back(compat::MakeColumnIndex(i));
   }
   compat::SetLogicalGetColumnIds(*scan_op, std::move(column_ids));
-  RegisterTableMapping(ir_table_idx, column_ids);
+  // Need to rebuild column_ids for registration since it was moved
+  compat::column_ids_vector_t column_ids_for_map;
+  for (duckdb::idx_t i = 0; i < table_entry->GetColumns().LogicalColumnCount();
+       i++) {
+    column_ids_for_map.push_back(compat::MakeColumnIndex(i));
+  }
+  RegisterTableMapping(ir_table_idx, column_ids_for_map);
 
   // fixme: check how duckdb has filter condition in scan node, now we wrap it
   //  with a filter node

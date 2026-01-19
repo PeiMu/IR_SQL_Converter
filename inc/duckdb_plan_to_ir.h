@@ -12,7 +12,6 @@
 
 #include "duckdb/common/enums/join_type.hpp"
 #include "duckdb/common/printer.hpp"
-#include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/optimizer/query_split/query_split_util.h"
 #include "duckdb/optimizer/query_split/split_algorithm.hpp"
 #include "duckdb/parser/expression/case_expression.hpp"

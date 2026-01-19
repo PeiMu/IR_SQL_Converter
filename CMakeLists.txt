@@ -23,8 +23,11 @@ add_subdirectory(third_party)
 
 # DuckDB
 option(DUCKDB_VERSION_010 "Build against DuckDB 0.10.1" OFF)
+option(DUCKDB_VERSION_061 "Build against DuckDB 0.6.1" OFF)
 
-if (DUCKDB_VERSION_010)
+if(DUCKDB_VERSION_061)
+    set(DUCKDB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../duckdb-polr" CACHE PATH "DuckDB 0.6.1 root")
+elseif (DUCKDB_VERSION_010)
     set(DUCKDB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../duckdb_010" CACHE PATH "DuckDB source path")
     include_directories(${DUCKDB_ROOT}/third_party/re2)
 else ()

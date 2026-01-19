@@ -2,15 +2,26 @@
 
 #include "duckdb.hpp"
 
-// Detect DuckDB version - check for features unique to 1.3.2
-// ColumnIndex struct exists in 1.3.2 but not in 0.10.1
+// Detect DuckDB version
+// v1.3.2: has ColumnIndex and virtual_column_map_t
+// v0.10.1: has BoundLimitNode but no ColumnIndex
+// v0.6.1: has int64_t limit_val/offset_val, no BoundLimitNode
+
 #if __has_include("duckdb/common/column_index.hpp")
+// DuckDB 1.3.2+
 #define DUCKDB_VERSION_MAJOR 1
 #define DUCKDB_VERSION_MINOR 3
 #include "duckdb/common/column_index.hpp"
-#else
+#include "duckdb/common/types/column/column_data_collection.hpp"
+#elif __has_include("duckdb/common/types/column/column_data_collection.hpp")
+// DuckDB 0.10.1 - has column/ subdirectory, has LimitNodeType
 #define DUCKDB_VERSION_MAJOR 0
 #define DUCKDB_VERSION_MINOR 10
+#include "duckdb/common/types/column/column_data_collection.hpp"
+#else
+// DuckDB 0.6.1 or earlier - no column/ subdirectory, no LimitNodeType
+#define DUCKDB_VERSION_MAJOR 0
+#define DUCKDB_VERSION_MINOR 6
 #endif
 
 namespace ir_sql_converter {
@@ -32,9 +43,9 @@ inline duckdb::ColumnIndex MakeColumnIndex(duckdb::idx_t idx) {
   return duckdb::ColumnIndex(idx);
 }
 
-#else // v0.10.1
+#else // v0.10.1 and v0.6.1
 
-// v0.10.1: column_t is just idx_t
+// v0.10.1/v0.6.1: column_t is just idx_t
 using column_index_t = duckdb::column_t;
 
 inline duckdb::idx_t GetColumnId(duckdb::column_t col_idx) { return col_idx; }
@@ -68,12 +79,12 @@ MakeLogicalGet(duckdb::idx_t table_index, duckdb::TableFunction function,
   return duckdb::make_uniq<duckdb::LogicalGet>(
       table_index, std::move(function), std::move(bind_data),
       std::move(return_types), std::move(return_names),
-      duckdb::virtual_column_map_t()); // Add empty virtual_columns
+      duckdb::virtual_column_map_t());
 }
 
-#else // v0.10.1
+#else // v0.10.1 and v0.6.1
 
-// v0.10.1: Direct member access
+// v0.10.1/v0.6.1: Direct member access
 inline const duckdb::vector<duckdb::column_t> &
 GetLogicalGetColumnIds(const duckdb::LogicalGet &get_op) {
   return get_op.column_ids;
@@ -84,7 +95,7 @@ inline void SetLogicalGetColumnIds(duckdb::LogicalGet &get_op,
   get_op.column_ids = std::move(ids);
 }
 
-// v0.10.1: Constructor without virtual_columns
+// v0.10.1/v0.6.1: Constructor without virtual_columns
 inline duckdb::unique_ptr<duckdb::LogicalGet>
 MakeLogicalGet(duckdb::idx_t table_index, duckdb::TableFunction function,
                duckdb::unique_ptr<duckdb::FunctionData> bind_data,
@@ -109,7 +120,7 @@ GetTableNameFromLogicalGet(const duckdb::LogicalGet &get_op) {
   return table_name["Table"];
 }
 
-#else // v0.10.1
+#else // v0.10.1 and v0.6.1
 
 // v0.10.1: Returns string - need to parse it
 inline std::string
@@ -119,6 +130,63 @@ GetTableNameFromLogicalGet(const duckdb::LogicalGet &get_op) {
   return table_name;
 }
 
+#endif
+
+//=============================================================================
+// LogicalLimit Compatibility
+//=============================================================================
+#if DUCKDB_VERSION_MINOR >= 10 || DUCKDB_VERSION_MAJOR >= 1
+
+// v0.10.1 and v1.3.2: Use BoundLimitNode
+inline bool HasConstantLimit(const duckdb::LogicalLimit &limit_op) {
+  return limit_op.limit_val.Type() == duckdb::LimitNodeType::CONSTANT_VALUE;
+}
+
+inline int64_t GetLimitValue(const duckdb::LogicalLimit &limit_op) {
+  return static_cast<int64_t>(limit_op.limit_val.GetConstantValue());
+}
+
+inline bool HasConstantOffset(const duckdb::LogicalLimit &limit_op) {
+  return limit_op.offset_val.Type() == duckdb::LimitNodeType::CONSTANT_VALUE;
+}
+
+inline int64_t GetOffsetValue(const duckdb::LogicalLimit &limit_op) {
+  return static_cast<int64_t>(limit_op.offset_val.GetConstantValue());
+}
+
+inline bool IsOffsetUnset(const duckdb::LogicalLimit &limit_op) {
+  return limit_op.offset_val.Type() == duckdb::LimitNodeType::UNSET;
+}
+inline bool IsLimitUnset(const duckdb::LogicalLimit &limit_op) {
+  return limit_op.limit_val.Type() == duckdb::LimitNodeType::UNSET;
+}
+#else // v0.6.1
+
+// todo: need to confirm
+// v0.6.1: Use int64_t directly
+inline bool HasConstantLimit(const duckdb::LogicalLimit &limit_op) {
+  return limit_op.limit != nullptr || limit_op.limit_val >= 0;
+}
+
+inline int64_t GetLimitValue(const duckdb::LogicalLimit &limit_op) {
+  return limit_op.limit_val;
+}
+
+inline bool HasConstantOffset(const duckdb::LogicalLimit &limit_op) {
+  return limit_op.offset != nullptr || limit_op.offset_val >= 0;
+}
+
+inline int64_t GetOffsetValue(const duckdb::LogicalLimit &limit_op) {
+  return limit_op.offset_val;
+}
+
+inline bool IsOffsetUnset(const duckdb::LogicalLimit &limit_op) {
+  return limit_op.offset == nullptr && limit_op.offset_val < 0;
+}
+inline bool IsLimitUnset(const duckdb::LogicalLimit &limit_op) {
+  return limit_op.limit == nullptr &&
+         limit_op.limit_val == duckdb::NumericLimits<int64_t>::Maximum();
+}
 #endif
 
 //=============================================================================

@@ -292,37 +292,29 @@ DuckToIR::ConstructSimplestLimit(duckdb::LogicalLimit &limit_op,
   // todo: add target list
   std::vector<std::unique_ptr<SimplestAttr>> target_list;
 
-  std::vector<OrderStruct> orders;
-  OrderStruct order_struct;
-  std::unique_ptr<SimplestAttr> simplest_attr;
+  // todo: confirm this
   LimitVal limit_val{}, offset_val{};
-  switch (limit_op.limit_val.Type()) {
-  case duckdb::LimitNodeType::UNSET:
+  // Use compat layer for limit value
+  if (compat::IsLimitUnset(limit_op)) {
     duckdb::Printer::Print("Unset limit node type!");
     D_ASSERT(false);
-    exit(-1);
-  case duckdb::LimitNodeType::CONSTANT_VALUE: {
+  } else if (compat::HasConstantLimit(limit_op)) {
     limit_val.type = SimplestLimitType::CONSTANT_VALUE;
-    limit_val.val = limit_op.limit_val.GetConstantValue();
-    break;
-  }
-  default:
-    duckdb::Printer::Print("Unsupport limit type!!!");
+    limit_val.val = compat::GetLimitValue(limit_op);
+  } else {
+    duckdb::Printer::Print("Unsupported limit type!!!");
     D_ASSERT(false);
   }
-  switch (limit_op.offset_val.Type()) {
-  case duckdb::LimitNodeType::UNSET: {
+
+  // Use compat layer for offset value
+  if (compat::IsOffsetUnset(limit_op)) {
     offset_val.type = SimplestLimitType::UNSET;
     offset_val.val = 0;
-    break;
-  }
-  case duckdb::LimitNodeType::CONSTANT_VALUE: {
+  } else if (compat::HasConstantOffset(limit_op)) {
     offset_val.type = SimplestLimitType::CONSTANT_VALUE;
-    offset_val.val = limit_op.offset_val.GetConstantValue();
-    break;
-  }
-  default:
-    duckdb::Printer::Print("Unsupport limit type!!!");
+    offset_val.val = compat::GetOffsetValue(limit_op);
+  } else {
+    duckdb::Printer::Print("Unsupported offset type!!!");
     D_ASSERT(false);
   }
 
