@@ -68,7 +68,7 @@ int main(int argc, char **argv) {
     deserialized_simplest_ir->Print();
 
     auto duckdb_plan = ir_sql_converter::ConvertIRToDuckDBPlan(
-        *planner->binder, *context, deserialized_simplest_ir);
+        *planner->binder, *context, deserialized_simplest_ir, nullptr, true);
     // print out DuckDB plan
     std::cout << "duckdb plan converted from simplest ir:\n";
     duckdb_plan->Print();

@@ -68,9 +68,15 @@ duckdb::unique_ptr<duckdb::LogicalOperator> ConvertIRToDuckDBPlan(
     const std::unique_ptr<SimplestStmt> &simplest_ir,
     std::unordered_map<duckdb::idx_t,
                        duckdb::unique_ptr<duckdb::ColumnDataCollection>>
-        *intermediate_results) {
+        *intermediate_results,
+    bool run_post_optimize) {
   ir_sql_converter::IRToDuck converter(binder, context, intermediate_results);
   auto duckdb_plan = converter.ConstructDuckdbPlan(simplest_ir);
+  // optionally run post optimization
+  if (run_post_optimize) {
+    duckdb::Optimizer optimizer(binder, context);
+    duckdb_plan = optimizer.PostOptimize(std::move(duckdb_plan));
+  }
   return std::move(duckdb_plan);
 }
 

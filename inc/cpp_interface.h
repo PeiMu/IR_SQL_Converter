@@ -2,6 +2,7 @@
 
 #include <fstream>
 
+#include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb_plan_to_ir.h"
 #include "ir_to_duckdb_plan.h"
 #include "ir_to_sql.h"
@@ -30,7 +31,8 @@ duckdb::unique_ptr<duckdb::LogicalOperator> ConvertIRToDuckDBPlan(
     const std::unique_ptr<SimplestStmt> &simplest_ir,
     std::unordered_map<duckdb::idx_t,
                        duckdb::unique_ptr<duckdb::ColumnDataCollection>>
-        *intermediate_results = nullptr);
+        *intermediate_results,
+    bool run_post_optimize);
 
 std::string ConvertIRToSQL(SimplestStmt &simplest_stmt, size_t query_id,
                            bool save_file = false,
