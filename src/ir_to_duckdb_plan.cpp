@@ -27,8 +27,8 @@ duckdb::unique_ptr<duckdb::LogicalComparisonJoin> IRToDuck::ConstructDuckdbJoin(
     duckdb_join->mark_index = ir_join.GetMarkIndex();
 
     // Register mark_index binding
-    duckdb::vector<duckdb::ColumnIndex> mark_ids;
-    mark_ids.push_back(duckdb::ColumnIndex(0));
+    compat::column_ids_vector_t mark_ids;
+    mark_ids.push_back(compat::MakeColumnIndex(0));
     RegisterTableMapping(ir_join.GetMarkIndex(), mark_ids);
   }
 
@@ -62,20 +62,19 @@ IRToDuck::ConstructDuckdbScan(const SimplestScan &simplest_scan) {
   }
 
   // Create LogicalGet using IR's table index
-  auto scan_op = duckdb::make_uniq<duckdb::LogicalGet>(
-      ir_table_idx, scan_function, std::move(bind_data),
-      std::move(return_types), std::move(return_names),
-      duckdb::virtual_column_map_t());
+  auto scan_op =
+      compat::MakeLogicalGet(ir_table_idx, scan_function, std::move(bind_data),
+                             std::move(return_types), std::move(return_names));
 
   // Set estimated cardinality
   scan_op->estimated_cardinality = simplest_scan.GetEstimatedCardinality();
 
-  duckdb::vector<duckdb::ColumnIndex> column_ids;
+  compat::column_ids_vector_t column_ids;
   for (duckdb::idx_t i = 0; i < table_entry->GetColumns().LogicalColumnCount();
        i++) {
-    column_ids.push_back(duckdb::ColumnIndex(i));
+    column_ids.push_back(compat::MakeColumnIndex(i));
   }
-  scan_op->SetColumnIds(std::move(column_ids));
+  compat::SetLogicalGetColumnIds(*scan_op, std::move(column_ids));
   RegisterTableMapping(ir_table_idx, column_ids);
 
   // fixme: check how duckdb has filter condition in scan node, now we wrap it
@@ -220,12 +219,12 @@ IRToDuck::ConstructDuckdbChunk(const SimplestChunk &simplest_chunk) {
   // Create LogicalColumnDataGet
   auto chunk_get = duckdb::make_uniq<duckdb::LogicalColumnDataGet>(
       table_idx, chunk_types, std::move(collection));
-  chunk_get->SetEstimatedCardinality(simplest_chunk.GetEstimatedCardinality());
+  chunk_get->estimated_cardinality = simplest_chunk.GetEstimatedCardinality();
 
   // Register column mapping
-  duckdb::vector<duckdb::ColumnIndex> column_ids;
+  compat::column_ids_vector_t column_ids;
   for (duckdb::idx_t i = 0; i < chunk_types.size(); i++) {
-    column_ids.push_back(duckdb::ColumnIndex(i));
+    column_ids.push_back(compat::MakeColumnIndex(i));
   }
   RegisterTableMapping(table_idx, column_ids);
 
@@ -254,13 +253,12 @@ IRToDuck::ConstructDuckdbColumnDataGet(const SimplestChunk &simplest_chunk) {
     // once)
     auto chunk_get = duckdb::make_uniq<duckdb::LogicalColumnDataGet>(
         table_idx, types, std::move(collection));
-    chunk_get->SetEstimatedCardinality(
-        simplest_chunk.GetEstimatedCardinality());
+    chunk_get->estimated_cardinality = simplest_chunk.GetEstimatedCardinality();
 
     // Register column mapping (identity for intermediate results)
-    duckdb::vector<duckdb::ColumnIndex> column_ids;
+    compat::column_ids_vector_t column_ids;
     for (duckdb::idx_t i = 0; i < types.size(); i++) {
-      column_ids.push_back(duckdb::ColumnIndex(i));
+      column_ids.push_back(compat::MakeColumnIndex(i));
     }
     RegisterTableMapping(table_idx, column_ids);
 
@@ -426,15 +424,15 @@ duckdb::unique_ptr<duckdb::LogicalAggregate> IRToDuck::ConstructDuckdbAggregate(
     const SimplestAggregate &simplest_agg,
     duckdb::unique_ptr<duckdb::LogicalOperator> child) {
   if (!simplest_agg.groups.empty()) {
-    duckdb::vector<duckdb::ColumnIndex> group_ids;
+    compat::column_ids_vector_t group_ids;
     for (duckdb::idx_t i = 0; i < simplest_agg.groups.size(); i++) {
-      group_ids.push_back(duckdb::ColumnIndex(i));
+      group_ids.push_back(compat::MakeColumnIndex(i));
     }
     RegisterTableMapping(simplest_agg.GetGroupIndex(), group_ids);
   }
-  duckdb::vector<duckdb::ColumnIndex> agg_ids;
+  compat::column_ids_vector_t agg_ids;
   for (duckdb::idx_t i = 0; i < simplest_agg.agg_fns.size(); i++) {
-    agg_ids.push_back(duckdb::ColumnIndex(i));
+    agg_ids.push_back(compat::MakeColumnIndex(i));
   }
   RegisterTableMapping(simplest_agg.GetAggIndex(), agg_ids);
 
@@ -637,12 +635,11 @@ duckdb::JoinType IRToDuck::ConvertJoinType(SimplestJoinType type) {
 }
 
 void IRToDuck::RegisterTableMapping(
-    duckdb::idx_t table_idx,
-    const duckdb::vector<duckdb::ColumnIndex> &column_ids) {
+    duckdb::idx_t table_idx, const compat::column_ids_vector_t &column_ids) {
   std::unordered_map<duckdb::idx_t, duckdb::idx_t> mapping;
   for (duckdb::idx_t binding_idx = 0; binding_idx < column_ids.size();
        binding_idx++) {
-    duckdb::idx_t actual_col_id = column_ids[binding_idx].GetPrimaryIndex();
+    duckdb::idx_t actual_col_id = compat::GetColumnId(column_ids[binding_idx]);
     mapping[actual_col_id] = binding_idx;
   }
   actual_to_binding_map[table_idx] = mapping;

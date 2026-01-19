@@ -19,9 +19,9 @@
 using namespace duckdb;
 
 int main(int argc, char **argv) {
-  std::string db_path = "/home/pei/Project/duckdb/measure/imdb.db";
+  std::string db_path = "/home/pei/Project/duckdb_132/measure/imdb.db";
   std::string plan_dir =
-      "/home/pei/Project/duckdb/measure/logical_plan_v1.3.2_split_0.bin";
+      "/home/pei/Project/duckdb_132/measure/logical_plan_v1.3.2_split_0.bin";
 
   DuckDB db(db_path);
   Connection conn(db);
@@ -74,7 +74,7 @@ int main(int argc, char **argv) {
     duckdb_plan->Print();
 
     // Serialize the logical plan to binary file
-    std::string filename = "/home/pei/Project/duckdb/measure/test.bin";
+    std::string filename = "/home/pei/Project/duckdb_132/measure/test.bin";
 
     BufferedFileWriter writer(FileSystem::GetFileSystem(*context), filename);
     BinarySerializer serializer(writer);

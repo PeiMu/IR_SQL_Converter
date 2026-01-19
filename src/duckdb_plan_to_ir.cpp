@@ -172,15 +172,15 @@ DuckToIR::ConstructSimplestAggGroup(duckdb::LogicalAggregate &agg_group_op,
   std::unique_ptr<SimplestAttr> simplest_attr;
   std::vector<std::unique_ptr<SimplestAttr>> groups;
   if (!agg_group_op.groups.empty()) {
-    duckdb::vector<duckdb::ColumnIndex> group_ids;
+    compat::column_ids_vector_t group_ids;
     for (duckdb::idx_t i = 0; i < agg_group_op.groups.size(); i++) {
-      group_ids.push_back(duckdb::ColumnIndex(i));
+      group_ids.push_back(compat::MakeColumnIndex(i));
     }
     table_column_ids_map[agg_group_op.group_index] = group_ids;
   }
-  duckdb::vector<duckdb::ColumnIndex> agg_ids;
+  compat::column_ids_vector_t agg_ids;
   for (duckdb::idx_t i = 0; i < agg_group_op.expressions.size(); i++) {
-    agg_ids.push_back(duckdb::ColumnIndex(i));
+    agg_ids.push_back(compat::MakeColumnIndex(i));
   }
   table_column_ids_map[agg_group_op.aggregate_index] = agg_ids;
 
@@ -372,6 +372,9 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
   case duckdb::JoinType::MARK:
     join_type = SimplestJoinType::Mark;
     break;
+  case duckdb::JoinType::SEMI:
+    join_type = SimplestJoinType::Semi;
+    break;
   default:
     duckdb::Printer::Print(duckdb::StringUtil::Format(
         "Do not support yet, join_type:  %s", join_op.join_type));
@@ -426,8 +429,8 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
     simplest_join->SetMarkIndex(join_op.mark_index);
 
     // Register mark_index output binding (single boolean column)
-    duckdb::vector<duckdb::ColumnIndex> mark_ids;
-    mark_ids.push_back(duckdb::ColumnIndex(0));
+    compat::column_ids_vector_t mark_ids;
+    mark_ids.push_back(compat::MakeColumnIndex(0));
     table_column_ids_map[join_op.mark_index] = mark_ids;
   }
 
@@ -461,7 +464,7 @@ DuckToIR::ConstructSimplestScan(duckdb::LogicalGet &get_op) {
   uint64_t estimated_card = get_op.EstimateCardinality(context);
 
   // Store column_ids and column names mapping for this table
-  table_column_ids_map[table_index] = get_op.GetColumnIds();
+  table_column_ids_map[table_index] = compat::GetLogicalGetColumnIds(get_op);
 
   // add target list
   std::vector<std::unique_ptr<SimplestAttr>> target_list;
@@ -470,8 +473,8 @@ DuckToIR::ConstructSimplestScan(duckdb::LogicalGet &get_op) {
 #endif
   // Build target list using actual column indices from the base table
   // column_ids maps: column_ids[binding_idx] = base_table_column_idx
-  for (size_t binding_idx = 0; binding_idx < get_op.GetColumnIds().size();
-       binding_idx++) {
+  auto &column_ids = compat::GetLogicalGetColumnIds(get_op);
+  for (size_t binding_idx = 0; binding_idx < column_ids.size(); binding_idx++) {
     auto actual_column_id = ResolveDuckDBColumnIndex(table_index, binding_idx);
     // Store the base table column index (column_id) in SimplestAttr
     // This ensures the IR uses base table schema indices consistently
@@ -497,8 +500,7 @@ DuckToIR::ConstructSimplestScan(duckdb::LogicalGet &get_op) {
 
   auto base_stmt = std::make_unique<SimplestStmt>(
       std::move(target_list), std::move(qual_vec), SimplestNodeType::ScanNode);
-  auto table_param_str = get_op.ParamsToString();
-  auto table_name = table_param_str["Table"];
+  auto table_name = compat::GetTableNameFromLogicalGet(get_op);
   auto simplest_scan = std::make_unique<SimplestScan>(
       std::move(base_stmt), table_index, table_name, estimated_card);
   return simplest_scan;
@@ -532,10 +534,11 @@ std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunk(
   column_data_get_op.collection->InitializeScanChunk(chunk);
   duckdb::ColumnDataScanState scan_state;
   column_data_get_op.collection->InitializeScan(scan_state);
-  duckdb::vector<duckdb::ColumnIndex> chunk_column_idx;
+  compat::column_ids_vector_t chunk_column_idx;
   auto column_bindings = column_data_get_op.GetColumnBindings();
   for (const auto &bind_pair : column_bindings) {
-    chunk_column_idx.emplace_back(duckdb::ColumnIndex(bind_pair.column_index));
+    chunk_column_idx.emplace_back(
+        compat::MakeColumnIndex(bind_pair.column_index));
   }
   table_column_ids_map[table_index] = chunk_column_idx;
 
@@ -576,10 +579,11 @@ std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunkPlaceholder(
   uint64_t estimated_card = column_data_get_op.EstimateCardinality(context);
 
   // Register column mapping
-  duckdb::vector<duckdb::ColumnIndex> chunk_column_idx;
+  compat::column_ids_vector_t chunk_column_idx;
   auto column_bindings = column_data_get_op.GetColumnBindings();
   for (const auto &bind_pair : column_bindings) {
-    chunk_column_idx.emplace_back(duckdb::ColumnIndex(bind_pair.column_index));
+    chunk_column_idx.emplace_back(
+        compat::MakeColumnIndex(bind_pair.column_index));
   }
   table_column_ids_map[table_index] = chunk_column_idx;
 
@@ -699,7 +703,7 @@ duckdb::column_t DuckToIR::ResolveDuckDBColumnIndex(duckdb::idx_t table_idx,
                        std::to_string(table_idx) + ", " +
                        std::to_string(binding_idx) + ")");
   }
-  auto column_id = it->second[binding_idx].GetPrimaryIndex();
+  auto column_id = compat::GetColumnId(it->second[binding_idx]);
   if (column_id == duckdb::COLUMN_IDENTIFIER_ROW_ID) {
     std::cout << "warning: return COLUMN_IDENTIFIER_ROW_ID\n";
     return binding_idx; // Return binding index for row ID

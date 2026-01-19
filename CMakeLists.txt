@@ -8,22 +8,29 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
 
 find_program(CCACHE_PROGRAM ccache)
-if(CCACHE_PROGRAM)
+if (CCACHE_PROGRAM)
     set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CCACHE_PROGRAM}")
-else()
+else ()
     find_program(CCACHE_PROGRAM sccache)
-    if(CCACHE_PROGRAM)
+    if (CCACHE_PROGRAM)
         set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CCACHE_PROGRAM}")
-    endif()
-endif()
+    endif ()
+endif ()
 
 include_directories(third_party/libpg_query/include)
 include_directories(inc)
 add_subdirectory(third_party)
 
 # DuckDB
-set(DUCKDB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../duckdb" CACHE PATH "DuckDB source path")
-if(EXISTS ${DUCKDB_ROOT})
+option(DUCKDB_VERSION_010 "Build against DuckDB 0.10.1" OFF)
+
+if (DUCKDB_VERSION_010)
+    set(DUCKDB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../duckdb_010" CACHE PATH "DuckDB source path")
+    include_directories(${DUCKDB_ROOT}/third_party/re2)
+else ()
+    set(DUCKDB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../duckdb_132" CACHE PATH "DuckDB source path")
+endif ()
+if (EXISTS ${DUCKDB_ROOT})
     message(STATUS "Found DuckDB source at: ${DUCKDB_ROOT}")
 
     find_library(DUCKDB_LIB
@@ -31,9 +38,9 @@ if(EXISTS ${DUCKDB_ROOT})
             PATHS ${DUCKDB_ROOT}/build/release/src ${DUCKDB_ROOT}/build/debug/src
             NO_DEFAULT_PATH
     )
-else()
+else ()
     message(WARNING "DuckDB not found at ${DUCKDB_ROOT}")
-endif()
+endif ()
 
 find_package(nlohmann_json REQUIRED)
 
@@ -92,7 +99,7 @@ target_include_directories(IR_SQL_Converter_C PUBLIC ${DUCKDB_ROOT}/src/include)
 target_include_directories(IR_SQL_Converter_C_static PUBLIC ${DUCKDB_ROOT}/src/include)
 
 option(BUILD_TESTING "Build the testing tree" ON)
-if(BUILD_TESTING)
+if (BUILD_TESTING)
     add_subdirectory(c_test)
     add_subdirectory(cpp_test)
-endif()
+endif ()

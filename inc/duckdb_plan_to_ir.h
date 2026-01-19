@@ -38,6 +38,7 @@
 #include "duckdb/planner/operator/logical_limit.hpp"
 #include "duckdb/planner/operator/logical_order.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb_version_compat.h"
 #include "simplest_ir.h"
 
 #include <memory>
@@ -119,7 +120,7 @@ private:
   duckdb::ClientContext &context;
 
   // <table id, column binding mapping: binding id -> actual id>
-  std::unordered_map<duckdb::idx_t, duckdb::vector<duckdb::ColumnIndex>>
+  std::unordered_map<duckdb::idx_t, compat::column_ids_vector_t>
       table_column_ids_map;
 };
 } // namespace ir_sql_converter

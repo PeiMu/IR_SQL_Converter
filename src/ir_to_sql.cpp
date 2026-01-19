@@ -344,12 +344,13 @@ void IRToSQLConverter::GenerateSQL(SimplestStmt &op) {
     // `WHERE `
     for (const auto &qual : filter_op.qual_vec) {
       if (SingleAttr == qual->GetSimplestExprType()) {
-        // the `filter_field` should be collected in the child MARK join node
+        // the `filter_field` should be collected in the child MARK/SEMI join node
 #ifdef DEBUG
         assert(SimplestNodeType::JoinNode ==
                filter_op.children[0]->GetNodeType());
         auto &join_child_op = filter_op.children[0]->Cast<SimplestJoin>();
-        assert(SimplestJoinType::Mark == join_child_op.GetSimplestJoinType());
+        assert(SimplestJoinType::Mark == join_child_op.GetSimplestJoinType() ||
+               SimplestJoinType::Semi == join_child_op.GetSimplestJoinType());
 #endif
       } else {
         std::string filter_str = CollectFilter(qual);
@@ -393,7 +394,8 @@ void IRToSQLConverter::GenerateSQL(SimplestStmt &op) {
       }
       break;
     }
-    case Mark: {
+    case Mark:
+    case Semi: {
       // todo: check if it is always be a `IN` claude
       for (const auto &cond : conditions) {
         auto &var_comp = cond->Cast<SimplestVarComparison>();

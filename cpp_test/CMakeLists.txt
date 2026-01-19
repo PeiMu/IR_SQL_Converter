@@ -23,7 +23,7 @@ else()
 endif()
 
 # DuckDB
-set(DUCKDB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../duckdb" CACHE PATH "DuckDB source path")
+set(DUCKDB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../duckdb_132" CACHE PATH "DuckDB source path")
 if(EXISTS ${DUCKDB_ROOT})
     message(STATUS "Found DuckDB source at: ${DUCKDB_ROOT}")
 

@@ -39,6 +39,7 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_order.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb_version_compat.h"
 #include "simplest_ir.h"
 
 namespace ir_sql_converter {
@@ -106,7 +107,7 @@ private:
 
   void
   RegisterTableMapping(duckdb::idx_t table_idx,
-                       const duckdb::vector<duckdb::ColumnIndex> &column_ids);
+                            const compat::column_ids_vector_t &column_ids);
   duckdb::idx_t GetBindingIdx(duckdb::idx_t table_idx,
                               duckdb::idx_t actual_column_id);
 
