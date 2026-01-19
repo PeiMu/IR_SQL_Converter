@@ -14,7 +14,7 @@ make -j32
 ```
 compile with duckdb 1.3.2
 ```bash
-mkdir -p build_duckdb_010 && cd build_duckdb_010/
+mkdir -p build_duckdb_132 && cd build_duckdb_132/
 cmake -DDUCKDB_VERSION_010=OFF ..
 make -j32
 ```
