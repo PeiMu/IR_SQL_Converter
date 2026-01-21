@@ -8,6 +8,7 @@ duckdb::unique_ptr<duckdb::LogicalComparisonJoin> IRToDuck::ConstructDuckdbJoin(
     duckdb::unique_ptr<duckdb::LogicalOperator> right_child) {
   auto duckdb_join = duckdb::make_uniq<duckdb::LogicalComparisonJoin>(
       ConvertJoinType(ir_join.GetSimplestJoinType()));
+  duckdb_join->estimated_cardinality = ir_join.GetEstimatedCardinality();
   duckdb_join->children.push_back(std::move(left_child));
   duckdb_join->children.push_back(std::move(right_child));
 
@@ -102,6 +103,7 @@ duckdb::unique_ptr<duckdb::LogicalFilter> IRToDuck::ConstructDuckdbFilter(
     duckdb::unique_ptr<duckdb::LogicalOperator> child) {
 
   auto filter = duckdb::make_uniq<duckdb::LogicalFilter>();
+  filter->estimated_cardinality = simplest_filter.GetEstimatedCardinality();
 
   // Build filter expressions from IR
   for (const auto &ir_expr : simplest_filter.qual_vec) {
@@ -138,6 +140,7 @@ duckdb::unique_ptr<duckdb::LogicalOrder> IRToDuck::ConstructDuckdbSort(
   }
 
   auto order = duckdb::make_uniq<duckdb::LogicalOrder>(std::move(orders));
+  order->estimated_cardinality = simplest_sort.GetEstimatedCardinality();
   order->AddChild(std::move(child));
   return order;
 }
@@ -216,7 +219,7 @@ IRToDuck::ConstructDuckdbChunk(const SimplestChunk &simplest_chunk) {
     collection->Append(append_state, output);
   }
 
-  // Create LogicalColumnDataGet
+  // Create LogicalColumnDataGet with cardinality from IR
   auto chunk_get = duckdb::make_uniq<duckdb::LogicalColumnDataGet>(
       table_idx, chunk_types, std::move(collection));
   chunk_get->estimated_cardinality = simplest_chunk.GetEstimatedCardinality();
@@ -286,6 +289,7 @@ IRToDuck::ConstructDuckdbProjection(
   // Create LogicalProjection
   auto projection = duckdb::make_uniq<duckdb::LogicalProjection>(
       table_idx, std::move(select_list));
+  projection->estimated_cardinality = simplest_projection.GetEstimatedCardinality();
 
   // Add child
   projection->AddChild(std::move(child));
@@ -474,6 +478,7 @@ duckdb::unique_ptr<duckdb::LogicalAggregate> IRToDuck::ConstructDuckdbAggregate(
   auto logical_agg = duckdb::make_uniq<duckdb::LogicalAggregate>(
       simplest_agg.GetGroupIndex(), simplest_agg.GetAggIndex(),
       std::move(agg_expressions));
+  logical_agg->estimated_cardinality = simplest_agg.GetEstimatedCardinality();
 
   // Convert groups to DuckDB group expressions
   for (const auto &group : simplest_agg.groups) {

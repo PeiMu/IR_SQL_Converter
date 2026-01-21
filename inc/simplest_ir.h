@@ -807,7 +807,8 @@ public:
   SimplestStmt(std::unique_ptr<SimplestStmt> stmt, SimplestNodeType node_type)
       : SimplestNode(node_type), target_list(std::move(stmt->target_list)),
         children(std::move(stmt->children)),
-        qual_vec(std::move(stmt->qual_vec)) {};
+        qual_vec(std::move(stmt->qual_vec)),
+        estimated_cardinality(stmt->estimated_cardinality) {};
 
   SimplestStmt(const SimplestStmt &) = delete;            // no copy constructor
   SimplestStmt &operator=(const SimplestStmt &) = delete; // no copy assignment
@@ -820,6 +821,9 @@ public:
   void SimplestAddChild(std::unique_ptr<SimplestStmt> child) {
     children.emplace_back(std::move(child));
   }
+
+  uint64_t GetEstimatedCardinality() const { return estimated_cardinality; }
+  void SetEstimatedCardinality(uint64_t card) { estimated_cardinality = card; }
 
   std::string Print(bool print = true) override {
     std::string str;
@@ -856,6 +860,9 @@ public:
   // implicitly condition - from postgres
   // todo: need to check if only var-const comparison exists
   std::vector<std::unique_ptr<SimplestExpr>> qual_vec;
+
+protected:
+  uint64_t estimated_cardinality = 0;
 };
 
 class SimplestProjection : public SimplestStmt {
@@ -1271,10 +1278,9 @@ public:
 class SimplestScan : public SimplestStmt {
 public:
   SimplestScan(std::unique_ptr<SimplestStmt> base_stmt,
-               unsigned int table_index, std::string table_name,
-               uint64_t estimated_cardinality = 0)
+               unsigned int table_index, std::string table_name)
       : SimplestStmt(std::move(base_stmt), ScanNode), table_index(table_index),
-        table_name(table_name), estimated_cardinality(estimated_cardinality) {};
+        table_name(table_name) {};
 
   ~SimplestScan() override = default;
 
@@ -1284,15 +1290,12 @@ public:
 
   void SetTableName(std::string tbl_name) { table_name = std::move(tbl_name); }
 
-  uint64_t GetEstimatedCardinality() const { return estimated_cardinality; }
-  void SetEstimatedCardinality(uint64_t card) { estimated_cardinality = card; }
-
   std::string Print(bool print = true) override {
     std::string str = "\n";
     str += "╔══════════════════╗\n";
 
     str += "Table Scan \"" + table_name + "\":";
-    str += " (card=" + std::to_string(estimated_cardinality) + ")"; // ADD THIS
+    str += " (card=" + std::to_string(GetEstimatedCardinality()) + ")";
 
     str += SimplestStmt::Print(false);
     str += "╚══════════════════╝\n";
@@ -1306,7 +1309,6 @@ public:
 private:
   unsigned int table_index;
   std::string table_name;
-  uint64_t estimated_cardinality;
 };
 
 /*!
@@ -1314,10 +1316,9 @@ private:
 class SimplestChunk : public SimplestStmt {
 public:
   SimplestChunk(std::unique_ptr<SimplestStmt> base_stmt,
-                unsigned int table_index, std::vector<std::string> contents,
-                uint64_t estimated_cardinality = 0)
+                unsigned int table_index, std::vector<std::string> contents)
       : SimplestStmt(std::move(base_stmt), ChunkNode), table_index(table_index),
-        contents(contents), estimated_cardinality(estimated_cardinality) {};
+        contents(contents) {};
 
   ~SimplestChunk() override = default;
 
@@ -1325,14 +1326,12 @@ public:
 
   std::vector<std::string> GetContents() const { return contents; }
 
-  uint64_t GetEstimatedCardinality() const { return estimated_cardinality; }
-  void SetEstimatedCardinality(uint64_t card) { estimated_cardinality = card; }
-
   std::string Print(bool print = true) override {
     std::string str = "\n";
     str += "╔══════════════════╗\n";
 
     str += "Chunk: " + std::to_string(GetTableIndex()) + "\n";
+    str += " (card=" + std::to_string(GetEstimatedCardinality()) + ")\n";
     if (contents.size() > 10) {
       for (size_t i = 0; i < 10; i++) {
         str += contents[i];
@@ -1344,7 +1343,9 @@ public:
         str += content;
         str += ", ";
       }
-      str.erase(str.size() - 2);
+      if (!contents.empty()) {
+        str.erase(str.size() - 2);
+      }
     }
 
     str += "\n╚══════════════════╝\n";
@@ -1359,7 +1360,6 @@ private:
   // todo: there might be other types
   unsigned int table_index;
   std::vector<std::string> contents;
-  uint64_t estimated_cardinality;
 };
 
 class SimplestHash : public SimplestStmt {

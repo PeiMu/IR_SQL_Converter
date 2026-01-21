@@ -20,64 +20,73 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
       if (duckdb_plan_pointer->children.size() == 2)
         right_child = iterate_plan(duckdb_plan_pointer->children[1].get());
     }
+    std::unique_ptr<SimplestStmt> result;
     switch (duckdb_plan_pointer->type) {
     case duckdb::LogicalOperatorType::LOGICAL_PROJECTION: {
       auto &proj_op = duckdb_plan_pointer->Cast<duckdb::LogicalProjection>();
       auto simplest_proj =
           ConstructSimplestProj(proj_op, std::move(left_child));
-      return unique_ptr_cast<SimplestProjection, SimplestStmt>(
+      result = unique_ptr_cast<SimplestProjection, SimplestStmt>(
           std::move(simplest_proj));
+      break;
     }
     case duckdb::LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY: {
       auto &agg_group_op =
           duckdb_plan_pointer->Cast<duckdb::LogicalAggregate>();
       auto simplest_agg_group =
           ConstructSimplestAggGroup(agg_group_op, std::move(left_child));
-      return unique_ptr_cast<SimplestAggregate, SimplestStmt>(
+      result = unique_ptr_cast<SimplestAggregate, SimplestStmt>(
           std::move(simplest_agg_group));
+      break;
     }
     case duckdb::LogicalOperatorType::LOGICAL_ORDER_BY: {
       auto &order_by_op = duckdb_plan_pointer->Cast<duckdb::LogicalOrder>();
       auto simplest_order_by =
           ConstructSimplestOrderBy(order_by_op, std::move(left_child));
-      return unique_ptr_cast<SimplestOrderBy, SimplestStmt>(
+      result = unique_ptr_cast<SimplestOrderBy, SimplestStmt>(
           std::move(simplest_order_by));
+      break;
     }
     case duckdb::LogicalOperatorType::LOGICAL_LIMIT: {
       auto &limit_op = duckdb_plan_pointer->Cast<duckdb::LogicalLimit>();
       auto simplest_limit =
           ConstructSimplestLimit(limit_op, std::move(left_child));
-      return unique_ptr_cast<SimplestLimit, SimplestStmt>(
+      result = unique_ptr_cast<SimplestLimit, SimplestStmt>(
           std::move(simplest_limit));
+      break;
     }
     case duckdb::LogicalOperatorType::LOGICAL_FILTER: {
       auto &filter_op = duckdb_plan_pointer->Cast<duckdb::LogicalFilter>();
       auto simplest_filter =
           ConstructSimplestFilter(filter_op, std::move(left_child));
-      return unique_ptr_cast<SimplestFilter, SimplestStmt>(
+      result = unique_ptr_cast<SimplestFilter, SimplestStmt>(
           std::move(simplest_filter));
+      break;
     }
     case duckdb::LogicalOperatorType::LOGICAL_CROSS_PRODUCT: {
       auto &cross_product_op =
           duckdb_plan_pointer->Cast<duckdb::LogicalCrossProduct>();
       auto simplest_cross_product = ConstructSimplestCrossProduct(
           cross_product_op, std::move(left_child), std::move(right_child));
-      return unique_ptr_cast<SimplestCrossProduct, SimplestStmt>(
+      result = unique_ptr_cast<SimplestCrossProduct, SimplestStmt>(
           std::move(simplest_cross_product));
+      break;
     }
     case duckdb::LogicalOperatorType::LOGICAL_COMPARISON_JOIN: {
       auto &join_op =
           duckdb_plan_pointer->Cast<duckdb::LogicalComparisonJoin>();
       auto simplest_join = ConstructSimplestJoin(join_op, std::move(left_child),
                                                  std::move(right_child));
-      return unique_ptr_cast<SimplestJoin, SimplestStmt>(
+      result = unique_ptr_cast<SimplestJoin, SimplestStmt>(
           std::move(simplest_join));
+      break;
     }
     case duckdb::LogicalOperatorType::LOGICAL_GET: {
       auto &get_op = duckdb_plan_pointer->Cast<duckdb::LogicalGet>();
       auto simplest_scan = ConstructSimplestScan(get_op);
-      return unique_ptr_cast<SimplestScan, SimplestStmt>(
+      result = unique_ptr_cast<SimplestScan, SimplestStmt>(
           std::move(simplest_scan));
+      break;
     }
     case duckdb::LogicalOperatorType::LOGICAL_CHUNK_GET: {
       auto &column_data_get_op =
@@ -90,7 +99,7 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
           std::cout << "cross engine\n";
           // Cross-engine: embed actual data in SimplestChunk
           auto simplest_chunk = ConstructSimplestChunk(column_data_get_op);
-          return unique_ptr_cast<SimplestChunk, SimplestStmt>(
+          result = unique_ptr_cast<SimplestChunk, SimplestStmt>(
               std::move(simplest_chunk));
         } else {
           std::cout << "same engine\n";
@@ -98,16 +107,17 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
           // The engine will provide the data at execution time
           auto simplest_chunk =
               ConstructSimplestChunkPlaceholder(column_data_get_op);
-          return unique_ptr_cast<SimplestChunk, SimplestStmt>(
+          result = unique_ptr_cast<SimplestChunk, SimplestStmt>(
               std::move(simplest_chunk));
         }
       } else {
         std::cout << "embed data\n";
         // IN-clause constant list - always embed data
         auto simplest_chunk = ConstructSimplestChunk(column_data_get_op);
-        return unique_ptr_cast<SimplestChunk, SimplestStmt>(
+        result = unique_ptr_cast<SimplestChunk, SimplestStmt>(
             std::move(simplest_chunk));
       }
+      break;
     }
     default:
       duckdb::Printer::Print(duckdb::StringUtil::Format(
@@ -116,6 +126,13 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
       D_ASSERT(false);
       return nullptr;
     }
+
+    // Set estimated cardinality for all operators
+    if (result) {
+      result->SetEstimatedCardinality(duckdb_plan_pointer->EstimateCardinality(context));
+    }
+
+    return result;
   };
 
   auto simplest_stmt = iterate_plan(duckdb_plan_pointer);
@@ -461,8 +478,6 @@ std::unique_ptr<SimplestScan>
 DuckToIR::ConstructSimplestScan(duckdb::LogicalGet &get_op) {
   auto table_index = get_op.table_index;
 
-  uint64_t estimated_card = get_op.EstimateCardinality(context);
-
   // Store column_ids and column names mapping for this table
   table_column_ids_map[table_index] = compat::GetLogicalGetColumnIds(get_op);
 
@@ -502,7 +517,7 @@ DuckToIR::ConstructSimplestScan(duckdb::LogicalGet &get_op) {
       std::move(target_list), std::move(qual_vec), SimplestNodeType::ScanNode);
   auto table_name = compat::GetTableNameFromLogicalGet(get_op);
   auto simplest_scan = std::make_unique<SimplestScan>(
-      std::move(base_stmt), table_index, table_name, estimated_card);
+      std::move(base_stmt), table_index, table_name);
   return simplest_scan;
 }
 
@@ -529,7 +544,6 @@ std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunk(
   duckdb::DataChunk chunk;
 
   auto table_index = column_data_get_op.table_index;
-  uint64_t estimated_card = column_data_get_op.EstimateCardinality(context);
 
   column_data_get_op.collection->InitializeScanChunk(chunk);
   duckdb::ColumnDataScanState scan_state;
@@ -567,7 +581,6 @@ std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunk(
       std::move(target_list), std::move(qual_vec), SimplestNodeType::ChunkNode);
   auto simplest_chunk = std::make_unique<SimplestChunk>(
       std::move(base_stmt), column_data_get_op.table_index, chunk_contents);
-  simplest_chunk->SetEstimatedCardinality(estimated_card);
   return simplest_chunk;
 }
 

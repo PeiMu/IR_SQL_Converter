@@ -302,10 +302,15 @@ static void SerializeStmt(std::ostream &out, const SimplestStmt *stmt) {
       SerializeAttr(out, cond->left_attr.get());
       SerializeAttr(out, cond->right_attr.get());
     }
+
+    uint64_t card = join.GetEstimatedCardinality();
+    out.write(reinterpret_cast<const char *>(&card), sizeof(card));
     break;
   }
   case FilterNode: {
-    // Filter has no additional data beyond qual_vec
+    auto &filter = stmt->Cast<SimplestFilter>();
+    uint64_t card = filter.GetEstimatedCardinality();
+    out.write(reinterpret_cast<const char *>(&card), sizeof(card));
     break;
   }
   case SortNode: {
@@ -322,12 +327,18 @@ static void SerializeStmt(std::ostream &out, const SimplestStmt *stmt) {
       out.write(reinterpret_cast<const char *>(&order.nulls_first),
                 sizeof(order.nulls_first));
     }
+
+    uint64_t card = sort.GetEstimatedCardinality();
+    out.write(reinterpret_cast<const char *>(&card), sizeof(card));
     break;
   }
   case ProjectionNode: {
     auto &proj = stmt->Cast<SimplestProjection>();
     unsigned int table_idx = proj.GetIndex();
     out.write(reinterpret_cast<const char *>(&table_idx), sizeof(table_idx));
+
+    uint64_t card = proj.GetEstimatedCardinality();
+    out.write(reinterpret_cast<const char *>(&card), sizeof(card));
     break;
   }
   case ChunkNode: {
@@ -355,6 +366,9 @@ static void SerializeStmt(std::ostream &out, const SimplestStmt *stmt) {
     for (const auto &key : hash.hash_keys) {
       SerializeAttr(out, key.get());
     }
+
+    uint64_t card = hash.GetEstimatedCardinality();
+    out.write(reinterpret_cast<const char *>(&card), sizeof(card));
     break;
   }
   case AggregateNode: {
@@ -385,6 +399,9 @@ static void SerializeStmt(std::ostream &out, const SimplestStmt *stmt) {
     out.write(reinterpret_cast<const char *>(&agg_index), sizeof(agg_index));
     out.write(reinterpret_cast<const char *>(&group_index),
               sizeof(group_index));
+
+    uint64_t card = agg.GetEstimatedCardinality();
+    out.write(reinterpret_cast<const char *>(&card), sizeof(card));
     break;
   }
   default:
@@ -442,8 +459,9 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
                                                     SimplestNodeType::ScanNode);
 
     auto scan = std::make_unique<SimplestScan>(std::move(base_stmt), table_idx,
-                                               table_name, card);
+                                               table_name);
     scan->qual_vec = std::move(qual_vec);
+    scan->SetEstimatedCardinality(card);
     return scan;
   }
   case JoinNode: {
@@ -466,6 +484,9 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
           cond_type, std::move(left_attr), std::move(right_attr)));
     }
 
+    uint64_t card;
+    in.read(reinterpret_cast<char *>(&card), sizeof(card));
+
     // Create base_stmt with children
     auto base_stmt = std::make_unique<SimplestStmt>(std::move(children),
                                                     SimplestNodeType::JoinNode);
@@ -474,15 +495,20 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
     auto join = std::make_unique<SimplestJoin>(
         std::move(base_stmt), std::move(join_conditions), join_type);
     join->SetMarkIndex(mark_index);
+    join->SetEstimatedCardinality(card);
     return join;
   }
   case FilterNode: {
+    uint64_t card;
+    in.read(reinterpret_cast<char *>(&card), sizeof(card));
+
     // Create base_stmt with children, target_list, qual_vec
     auto base_stmt = std::make_unique<SimplestStmt>(
         std::move(children), std::move(target_list), std::move(qual_vec),
         SimplestNodeType::FilterNode);
 
     auto filter = std::make_unique<SimplestFilter>(std::move(base_stmt));
+    filter->SetEstimatedCardinality(card);
     return filter;
   }
   case SortNode: {
@@ -500,6 +526,9 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
       order_vec.push_back(order);
     }
 
+    uint64_t card;
+    in.read(reinterpret_cast<char *>(&card), sizeof(card));
+
     // Create base_stmt with children and target_list
     auto base_stmt = std::make_unique<SimplestStmt>(std::move(children),
                                                     std::move(target_list),
@@ -507,11 +536,15 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
 
     auto sort = std::make_unique<SimplestSort>(std::move(base_stmt),
                                                std::move(order_vec));
+    sort->SetEstimatedCardinality(card);
     return sort;
   }
   case ProjectionNode: {
     unsigned int table_idx;
     in.read(reinterpret_cast<char *>(&table_idx), sizeof(table_idx));
+
+    uint64_t card;
+    in.read(reinterpret_cast<char *>(&card), sizeof(card));
 
     // Create base_stmt with children and target_list
     auto base_stmt = std::make_unique<SimplestStmt>(
@@ -520,6 +553,7 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
 
     auto proj =
         std::make_unique<SimplestProjection>(std::move(base_stmt), table_idx);
+    proj->SetEstimatedCardinality(card);
     return proj;
   }
   case ChunkNode: {
@@ -536,12 +570,13 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
     uint64_t card;
     in.read(reinterpret_cast<char *>(&card), sizeof(card));
 
-    // Create base_stmt with children
+    // Create base_stmt with children and target_list (for column type info)
     auto base_stmt = std::make_unique<SimplestStmt>(
-        std::move(children), SimplestNodeType::ChunkNode);
+        std::move(children), std::move(target_list), SimplestNodeType::ChunkNode);
 
     auto chunk = std::make_unique<SimplestChunk>(std::move(base_stmt),
-                                                 table_idx, contents, card);
+                                                 table_idx, contents);
+    chunk->SetEstimatedCardinality(card);
     return chunk;
   }
   case HashNode: {
@@ -553,8 +588,12 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
       hash_keys.push_back(DeserializeAttr(in));
     }
 
+    uint64_t card;
+    in.read(reinterpret_cast<char *>(&card), sizeof(card));
+
     auto hash = std::make_unique<SimplestHash>(std::move(children[0]),
                                                std::move(hash_keys));
+    hash->SetEstimatedCardinality(card);
     return hash;
   }
   case AggregateNode: {
@@ -582,6 +621,9 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
     in.read(reinterpret_cast<char *>(&agg_index), sizeof(agg_index));
     in.read(reinterpret_cast<char *>(&group_index), sizeof(group_index));
 
+    uint64_t card;
+    in.read(reinterpret_cast<char *>(&card), sizeof(card));
+
     // Create base_stmt with children and target_list
     auto base_stmt = std::make_unique<SimplestStmt>(
         std::move(children), std::move(target_list),
@@ -590,6 +632,7 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
     auto agg = std::make_unique<SimplestAggregate>(
         std::move(base_stmt), std::move(agg_fns), std::move(groups), agg_index,
         group_index);
+    agg->SetEstimatedCardinality(card);
     return agg;
   }
   default:
@@ -609,7 +652,7 @@ void SaveSimplestIRToFile(const std::unique_ptr<SimplestStmt> &ir,
 
   // Write a magic number and version for future compatibility
   const uint32_t magic = 0x53495246; // "SIRF" (SimplestIR File)
-  const uint32_t version = 1;
+  const uint32_t version = 2;        // v2: added estimated_cardinality for all nodes
   file.write(reinterpret_cast<const char *>(&magic), sizeof(magic));
   file.write(reinterpret_cast<const char *>(&version), sizeof(version));
 
@@ -637,9 +680,10 @@ LoadSimplestIRFromFile(const std::string &filename) {
         "Invalid SimplestIR file format (bad magic number)");
   }
 
-  if (version != 1) {
+  if (version != 2) {
     throw std::runtime_error("Unsupported SimplestIR file version: " +
-                             std::to_string(version));
+                             std::to_string(version) +
+                             ". Expected version 2 (with estimated_cardinality).");
   }
 
   // Deserialize the IR tree
