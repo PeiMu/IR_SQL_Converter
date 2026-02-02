@@ -4,6 +4,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -351,7 +352,7 @@ public:
 
   ~SimplestParam() override = default;
 
-  unsigned int GetParamId() { return param_id; }
+  unsigned int GetParamId() const { return param_id; }
 
   std::string Print(bool print = true) override {
     std::string str;
@@ -1294,7 +1295,8 @@ public:
     std::string str = "\n";
     str += "╔══════════════════╗\n";
 
-    str += "Table Scan \"" + table_name + "\":";
+    str += "Table Scan \"" + table_name +
+           "\" (index=" + std::to_string(table_index) + "):";
     str += " (card=" + std::to_string(GetEstimatedCardinality()) + ")";
 
     str += SimplestStmt::Print(false);

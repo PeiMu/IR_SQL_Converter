@@ -4,6 +4,7 @@
 
 #include "duckdb_plan_to_ir.h"
 #include "ir_to_duckdb_plan.h"
+#include "ir_to_nodestr.h"
 #include "ir_to_sql.h"
 #include "nodestr_to_ir.h"
 #include "parsetree_to_ir.h"
@@ -15,6 +16,10 @@ ConvertNodeStrToIRFromFile(const std::string &nodestr_file_name);
 
 std::unique_ptr<SimplestStmt> ConvertNodeStrToIR(const std::string &nodestr,
                                                  size_t query_id);
+
+// Convert SimplestIR to PostgreSQL nodestring format
+std::string
+ConvertIRToNodeStr(const std::unique_ptr<SimplestStmt> &simplest_ir);
 
 std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const json &parse_tree,
                                                    unsigned int sub_plan_id);

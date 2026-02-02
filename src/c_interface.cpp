@@ -60,6 +60,27 @@ IRConverterStmt ConvertNodeStrToIR_C(const char *nodestr, size_t query_id) {
   }
 }
 
+char *ConvertIRToNodeStr_C(IRConverterStmt stmt) {
+  if (!stmt) {
+    return nullptr;
+  }
+
+  try {
+    auto *internal = static_cast<IRConverterStmtInternal *>(stmt);
+    std::string nodestr = ConvertIRToNodeStr(internal->stmt);
+
+    char *c_str = static_cast<char *>(malloc(nodestr.length() + 1));
+    if (c_str) {
+      strcpy(c_str, nodestr.c_str());
+    } else {
+      std::cout << "Failed to allocate memory for nodestr!" << std::endl;
+    }
+    return c_str;
+  } catch (...) {
+    return nullptr;
+  }
+}
+
 IRConverterStmt ConvertParseTreeToIR_C(const char *sql,
                                        unsigned int sub_plan_id) {
   if (!sql) {

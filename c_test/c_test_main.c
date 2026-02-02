@@ -83,11 +83,75 @@ int TestConvertNodeStrToIR_C() {
   return 0;
 }
 
-int main(void) {
-  if (0 != TestConvertNodeStrToIRFromFile_C()) {
+int TestConvertIRToNodeStr_C() {
+  FILE *fp_in;
+  FILE *fp_out;
+  char *str = NULL;
+  size_t len = 0;
+  ssize_t read;
+
+  fp_in = fopen("../postgres_plan", "rb");
+  if (!fp_in) {
+    fprintf(stderr, "Failed to open input file ../postgres_plan\n");
     return 1;
   }
-  if (0 != TestConvertNodeStrToIR_C()) {
+
+  fp_out = fopen("../postgres_plan_generated", "wb");
+  if (!fp_out) {
+    fprintf(stderr, "Failed to open output file ../postgres_plan_generated\n");
+    fclose(fp_in);
+    return 1;
+  }
+
+  size_t id = 0;
+  while (-1 != (read = getline(&str, &len, fp_in))) {
+    // Remove trailing newline if present
+    if (read > 0 && str[read - 1] == '\n') {
+      str[read - 1] = '\0';
+    }
+
+    // Convert nodestr to IR
+    IRConverterStmt stmt = ConvertNodeStrToIR_C(str, id);
+    if (!stmt) {
+      fprintf(stderr, "Failed to convert nodestr to IR for query %zu\n", id);
+      fclose(fp_in);
+      fclose(fp_out);
+      free(str);
+      return 1;
+    }
+
+    // Convert IR back to nodestr
+    char *generated_nodestr = ConvertIRToNodeStr_C(stmt);
+    if (generated_nodestr) {
+      // Write the generated nodestring to output file
+      fprintf(fp_out, "%s\n", generated_nodestr);
+      printf("Query %zu: Successfully converted IR to NodeStr\n", id);
+      FreeSQLString(generated_nodestr);
+    } else {
+      fprintf(stderr, "Failed to convert IR to NodeStr for query %zu\n", id);
+    }
+
+    id++;
+    FreeStmt(stmt);
+  }
+
+  printf("Processed %zu queries\n", id);
+
+  fclose(fp_in);
+  fclose(fp_out);
+  free(str);
+
+  return 0;
+}
+
+int main(void) {
+  //  if (0 != TestConvertNodeStrToIRFromFile_C()) {
+  //    return 1;
+  //  }
+  //  if (0 != TestConvertNodeStrToIR_C()) {
+  //    return 1;
+  //  }
+  if (0 != TestConvertIRToNodeStr_C()) {
     return 1;
   }
 
