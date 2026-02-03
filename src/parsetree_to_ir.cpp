@@ -605,8 +605,19 @@ ParseTreeToIR::ConvertColumnRef(const json &col_ref) {
   SimplestVarType var_type =
       GetVarTypeFromColumn(actual_table_name, column_name);
 
-  // Column index is unknown without schema, use 0 for now
+  // Look up column index from schema
   unsigned int column_index = 0;
+  if (schema_parser_) {
+    int idx = schema_parser_->GetColumnIndex(actual_table_name, column_name);
+    if (idx >= 0) {
+      column_index = static_cast<unsigned int>(idx);
+    }
+  } else if (column_index_lookup_) {
+    int idx = column_index_lookup_(actual_table_name, column_name);
+    if (idx >= 0) {
+      column_index = static_cast<unsigned int>(idx);
+    }
+  }
 
   return std::make_unique<SimplestAttr>(var_type, table_index, column_index,
                                         column_name);

@@ -4,6 +4,36 @@
 
 namespace ir_sql_converter {
 
+// Global schema parser instance
+SchemaParser *g_schema_parser = nullptr;
+
+bool InitSchemaParser(const std::string &schema_path) {
+  if (g_schema_parser) {
+    delete g_schema_parser;
+  }
+  g_schema_parser = new SchemaParser();
+  bool success = g_schema_parser->LoadFromFile(schema_path);
+  if (!success) {
+    delete g_schema_parser;
+    g_schema_parser = nullptr;
+    std::cerr << "[IR_SQL_Converter] Failed to load schema from: "
+              << schema_path << std::endl;
+    return false;
+  }
+  std::cout << "[IR_SQL_Converter] Schema loaded from: " << schema_path
+            << std::endl;
+  return true;
+}
+
+void CleanupSchemaParser() {
+  if (g_schema_parser) {
+    delete g_schema_parser;
+    g_schema_parser = nullptr;
+  }
+}
+
+SchemaParser *GetSchemaParser() { return g_schema_parser; }
+
 std::vector<std::unique_ptr<SimplestStmt>>
 ConvertNodeStrToIRFromFile(const std::string &nodestr_file_name) {
   std::vector<std::unique_ptr<SimplestStmt>> simplest_irs;
@@ -58,6 +88,25 @@ std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const json &parse_tree,
                                                    unsigned int sub_plan_id) {
   ParseTreeToIR converter;
   return converter.Convert(parse_tree, sub_plan_id);
+}
+
+std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const json &parse_tree,
+                                                   unsigned int sub_plan_id,
+                                                   const SchemaParser *schema) {
+  ParseTreeToIR converter(schema);
+  return converter.Convert(parse_tree, sub_plan_id);
+}
+
+std::unique_ptr<SimplestStmt>
+ConvertParseTreeToIRWithSchema(const json &parse_tree,
+                               unsigned int sub_plan_id) {
+  if (!g_schema_parser) {
+    std::cerr << "[IR_SQL_Converter] Warning: global schema parser not "
+                 "initialized, column indices will be 0"
+              << std::endl;
+    return ConvertParseTreeToIR(parse_tree, sub_plan_id);
+  }
+  return ConvertParseTreeToIR(parse_tree, sub_plan_id, g_schema_parser);
 }
 
 std::unique_ptr<SimplestStmt> ConvertDuckDBPlanToIR(

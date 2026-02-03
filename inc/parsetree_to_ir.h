@@ -8,12 +8,14 @@
 
 #pragma once
 
+#include <functional>
 #include <limits.h>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "schema_parser.h"
 #include "simplest_ir.h"
 
 #include <nlohmann/json.hpp>
@@ -22,9 +24,23 @@ namespace ir_sql_converter {
 
 using json = nlohmann::json;
 
+// Callback type for looking up column ordinal position from database schema
+// Parameters: table_name, column_name
+// Returns: column index (0-based), or -1 if not found
+using ColumnIndexLookup =
+    std::function<int(const std::string &, const std::string &)>;
+
 class ParseTreeToIR {
 public:
   ParseTreeToIR() = default;
+
+  // Constructor with schema parser for column index lookup
+  explicit ParseTreeToIR(const SchemaParser *schema) : schema_parser_(schema) {}
+
+  // Constructor with custom callback (for flexibility)
+  explicit ParseTreeToIR(ColumnIndexLookup column_lookup)
+      : column_index_lookup_(std::move(column_lookup)) {}
+
   ~ParseTreeToIR() = default;
 
   // Main conversion function
@@ -94,5 +110,9 @@ private:
   // Aggregate function tracking
   std::vector<std::pair<std::unique_ptr<SimplestAttr>, SimplestAggFnType>>
       agg_functions;
+
+  // Schema lookup options (use one or the other)
+  const SchemaParser *schema_parser_ = nullptr;
+  ColumnIndexLookup column_index_lookup_;
 };
 } // namespace ir_sql_converter

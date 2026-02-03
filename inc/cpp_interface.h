@@ -8,9 +8,23 @@
 #include "ir_to_sql.h"
 #include "nodestr_to_ir.h"
 #include "parsetree_to_ir.h"
+#include "schema_parser.h"
 #include "simplest_ir.h"
 
 namespace ir_sql_converter {
+
+// Global schema parser (can be initialized once and reused)
+extern SchemaParser *g_schema_parser;
+
+// Initialize global schema parser from file
+bool InitSchemaParser(const std::string &schema_path);
+
+// Clean up global schema parser
+void CleanupSchemaParser();
+
+// Get the global schema parser
+SchemaParser *GetSchemaParser();
+
 std::vector<std::unique_ptr<SimplestStmt>>
 ConvertNodeStrToIRFromFile(const std::string &nodestr_file_name);
 
@@ -21,8 +35,19 @@ std::unique_ptr<SimplestStmt> ConvertNodeStrToIR(const std::string &nodestr,
 std::string
 ConvertIRToNodeStr(const std::unique_ptr<SimplestStmt> &simplest_ir);
 
+// Convert parse tree to IR (without schema - column indices will be 0)
 std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const json &parse_tree,
                                                    unsigned int sub_plan_id);
+
+// Convert parse tree to IR with schema parser for correct column indices
+std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const json &parse_tree,
+                                                   unsigned int sub_plan_id,
+                                                   const SchemaParser *schema);
+
+// Convert parse tree to IR using global schema parser
+std::unique_ptr<SimplestStmt>
+ConvertParseTreeToIRWithSchema(const json &parse_tree,
+                               unsigned int sub_plan_id);
 
 std::unique_ptr<SimplestStmt> ConvertDuckDBPlanToIR(
     duckdb::Binder &binder, duckdb::ClientContext &context,

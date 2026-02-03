@@ -2,7 +2,10 @@
 #include "cpp_interface.h"
 #include <cstring>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <vector>
+
+using json = nlohmann::json;
 
 using namespace ir_sql_converter;
 
@@ -23,6 +26,21 @@ struct IRConverterStmtInternal {
 };
 
 extern "C" {
+
+int InitSchemaParser_C(const char *schema_path) {
+  if (!schema_path) {
+    return 0;
+  }
+  try {
+    std::string path(schema_path);
+    return InitSchemaParser(path) ? 1 : 0;
+  } catch (...) {
+    return 0;
+  }
+}
+
+void CleanupSchemaParser_C(void) { CleanupSchemaParser(); }
+
 IRConverterStmtList
 ConvertNodeStrToIRFromFile_C(const char *nodestr_file_name) {
   if (!nodestr_file_name) {
@@ -81,15 +99,36 @@ char *ConvertIRToNodeStr_C(IRConverterStmt stmt) {
   }
 }
 
-IRConverterStmt ConvertParseTreeToIR_C(const char *sql,
+IRConverterStmt ConvertParseTreeToIR_C(const char *parse_tree_json,
                                        unsigned int sub_plan_id) {
-  if (!sql) {
+  if (!parse_tree_json) {
     return nullptr;
   }
 
   try {
-    std::string sql_str(sql);
-    auto stmt = ConvertParseTreeToIR(sql_str, sub_plan_id);
+    // Parse the JSON string to nlohmann::json
+    json parse_tree = json::parse(parse_tree_json);
+    auto stmt = ConvertParseTreeToIR(parse_tree, sub_plan_id);
+
+    auto *internal = new IRConverterStmtInternal();
+    internal->stmt = std::move(stmt);
+
+    return static_cast<IRConverterStmt>(internal);
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+IRConverterStmt ConvertParseTreeToIRWithSchema_C(const char *parse_tree_json,
+                                                 unsigned int sub_plan_id) {
+  if (!parse_tree_json) {
+    return nullptr;
+  }
+
+  try {
+    // Parse the JSON string to nlohmann::json
+    json parse_tree = json::parse(parse_tree_json);
+    auto stmt = ConvertParseTreeToIRWithSchema(parse_tree, sub_plan_id);
 
     auto *internal = new IRConverterStmtInternal();
     internal->stmt = std::move(stmt);

@@ -64,14 +64,22 @@ int TestConvertNodeStrToIR() {
 using json = nlohmann::json;
 
 int TestConvertPGParseTreeToIR() {
+  // Initialize schema parser for correct column indices
+  const std::string schema_path =
+      "/home/pei/Project/benchmarks/imdb_job-postgres/schema.sql";
+  if (!ir_sql_converter::InitSchemaParser(schema_path)) {
+    std::cerr << "Warning: Failed to load schema, column indices will be 0"
+              << std::endl;
+  }
+
   std::ifstream file(
       "/home/pei/Project/benchmarks/imdb_job-postgres/queries/6d.sql");
   std::stringstream buffer;
   buffer << file.rdbuf();
   std::string sql = buffer.str();
 
-  std::cout << "Testing ParseTree to IR conversion for SQL query:" << sql
-            << std::endl;
+  std::cout << "Testing ParseTree to IR conversion for SQL query:\n"
+            << sql << std::endl;
 
   // Parse SQL using libpg_query
   PgQueryParseResult result = pg_query_parse(sql.c_str());
@@ -88,19 +96,27 @@ int TestConvertPGParseTreeToIR() {
 
   size_t query_id = 1;
 
+  // Use schema-aware conversion for correct column indices
   std::unique_ptr<ir_sql_converter::SimplestStmt> stmt =
-      ir_sql_converter::ConvertParseTreeToIR(parse_tree, query_id);
+      ir_sql_converter::ConvertParseTreeToIRWithSchema(parse_tree, query_id);
   if (!stmt) {
     throw std::runtime_error("Failed to get stmt " + std::to_string(query_id));
   }
 
   TestConvertIRToSQL(*stmt, query_id);
+
+  // Cleanup schema parser
+  ir_sql_converter::CleanupSchemaParser();
+
   return 0;
 }
 
 int main(void) {
+  std::cout << "TestConvertNodeStrToIRFromFile\n";
   TestConvertNodeStrToIRFromFile();
+  std::cout << "TestConvertNodeStrToIR\n";
   TestConvertNodeStrToIR();
+  std::cout << "TestConvertPGParseTreeToIR\n";
   TestConvertPGParseTreeToIR();
 
   return 0;

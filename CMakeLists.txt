@@ -51,6 +51,7 @@ add_library(IR_SQL_Converter SHARED
         src/nodestr_to_ir.cpp
         src/ir_to_nodestr.cpp
         src/parsetree_to_ir.cpp
+        src/schema_parser.cpp
         src/ir_to_sql.cpp
         src/simplest_ir_serializer.cpp
 )
@@ -63,6 +64,7 @@ add_library(IR_SQL_Converter_static STATIC
         src/nodestr_to_ir.cpp
         src/ir_to_nodestr.cpp
         src/parsetree_to_ir.cpp
+        src/schema_parser.cpp
         src/ir_to_sql.cpp
         src/simplest_ir_serializer.cpp
 )
@@ -76,6 +78,7 @@ add_library(IR_SQL_Converter_C SHARED
         src/nodestr_to_ir.cpp
         src/ir_to_nodestr.cpp
         src/parsetree_to_ir.cpp
+        src/schema_parser.cpp
         src/ir_to_sql.cpp
         src/simplest_ir_serializer.cpp
 )
@@ -89,6 +92,7 @@ add_library(IR_SQL_Converter_C_static STATIC
         src/nodestr_to_ir.cpp
         src/ir_to_nodestr.cpp
         src/parsetree_to_ir.cpp
+        src/schema_parser.cpp
         src/ir_to_sql.cpp
         src/simplest_ir_serializer.cpp
 )
