@@ -77,15 +77,15 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
           duckdb_plan_pointer->Cast<duckdb::LogicalComparisonJoin>();
       auto simplest_join = ConstructSimplestJoin(join_op, std::move(left_child),
                                                  std::move(right_child));
-      result = unique_ptr_cast<SimplestJoin, SimplestStmt>(
-          std::move(simplest_join));
+      result =
+          unique_ptr_cast<SimplestJoin, SimplestStmt>(std::move(simplest_join));
       break;
     }
     case duckdb::LogicalOperatorType::LOGICAL_GET: {
       auto &get_op = duckdb_plan_pointer->Cast<duckdb::LogicalGet>();
       auto simplest_scan = ConstructSimplestScan(get_op);
-      result = unique_ptr_cast<SimplestScan, SimplestStmt>(
-          std::move(simplest_scan));
+      result =
+          unique_ptr_cast<SimplestScan, SimplestStmt>(std::move(simplest_scan));
       break;
     }
     case duckdb::LogicalOperatorType::LOGICAL_CHUNK_GET: {
@@ -129,7 +129,8 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
 
     // Set estimated cardinality for all operators
     if (result) {
-      result->SetEstimatedCardinality(duckdb_plan_pointer->EstimateCardinality(context));
+      result->SetEstimatedCardinality(
+          duckdb_plan_pointer->EstimateCardinality(context));
     }
 
     return result;
@@ -516,8 +517,8 @@ DuckToIR::ConstructSimplestScan(duckdb::LogicalGet &get_op) {
   auto base_stmt = std::make_unique<SimplestStmt>(
       std::move(target_list), std::move(qual_vec), SimplestNodeType::ScanNode);
   auto table_name = compat::GetTableNameFromLogicalGet(get_op);
-  auto simplest_scan = std::make_unique<SimplestScan>(
-      std::move(base_stmt), table_index, table_name);
+  auto simplest_scan = std::make_unique<SimplestScan>(std::move(base_stmt),
+                                                      table_index, table_name);
   return simplest_scan;
 }
 
@@ -846,13 +847,29 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
     auto &comparison_expr = expr->Cast<duckdb::BoundComparisonExpression>();
     auto &left_expr = comparison_expr.left;
     auto left_simplest_attr = ConvertAttr(left_expr);
-#ifdef DEBUG
-    D_ASSERT(comparison_expr.right->expression_class ==
-             ExpressionClass::BOUND_CONSTANT);
-#endif
-    auto &right_expr =
-        comparison_expr.right->Cast<duckdb::BoundConstantExpression>();
-    auto right_simplest_attr = ConvertConstVar(right_expr.value);
+
+    // Right side can be BOUND_CONSTANT or BOUND_CAST wrapping a BOUND_CONSTANT
+    duckdb::BoundConstantExpression *const_expr_ptr = nullptr;
+    if (comparison_expr.right->expression_class ==
+        duckdb::ExpressionClass::BOUND_CONSTANT) {
+      const_expr_ptr =
+          &comparison_expr.right->Cast<duckdb::BoundConstantExpression>();
+    } else if (comparison_expr.right->expression_class ==
+               duckdb::ExpressionClass::BOUND_CAST) {
+      // Unwrap CAST to get the underlying constant
+      auto &cast_expr =
+          comparison_expr.right->Cast<duckdb::BoundCastExpression>();
+      D_ASSERT(cast_expr.child->expression_class ==
+               duckdb::ExpressionClass::BOUND_CONSTANT);
+      const_expr_ptr =
+          &cast_expr.child->Cast<duckdb::BoundConstantExpression>();
+    } else {
+      duckdb::Printer::Print(duckdb::StringUtil::Format(
+          "Unsupported right expression class in comparison: %d",
+          static_cast<int>(comparison_expr.right->expression_class)));
+      D_ASSERT(false);
+    }
+    auto right_simplest_attr = ConvertConstVar(const_expr_ptr->value);
 
     auto simplest_var_const_comp = std::make_unique<SimplestVarConstComparison>(
         ConvertCompType(expr->type), std::move(left_simplest_attr),
