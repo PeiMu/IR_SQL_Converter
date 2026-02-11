@@ -133,8 +133,6 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
         result->SetEstimatedCardinality(
             duckdb_plan_pointer->EstimateCardinality(context));
       } else {
-        duckdb::Printer::Print(
-            "Warning: node doesn't have estimated cardinality!");
         result->SetEstimatedCardinality(0);
       }
     }
