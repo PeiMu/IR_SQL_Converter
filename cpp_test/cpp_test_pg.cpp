@@ -85,7 +85,7 @@ int TestConvertPGParseTreeToIR() {
   PgQueryParseResult result = pg_query_parse(sql.c_str());
 
   if (result.error) {
-    std::runtime_error("Parse error: " + std::string(result.error->message));
+    throw std::runtime_error("Parse error: " + std::string(result.error->message));
     pg_query_free_parse_result(result);
     exit(-1);
   }
