@@ -129,8 +129,14 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
 
     // Set estimated cardinality for all operators
     if (result) {
-      result->SetEstimatedCardinality(
-          duckdb_plan_pointer->EstimateCardinality(context));
+      if (duckdb_plan_pointer->has_estimated_cardinality) {
+        result->SetEstimatedCardinality(
+            duckdb_plan_pointer->EstimateCardinality(context));
+      } else {
+        duckdb::Printer::Print(
+            "Warning: node doesn't have estimated cardinality!");
+        result->SetEstimatedCardinality(0);
+      }
     }
 
     return result;
@@ -156,15 +162,20 @@ DuckToIR::ConstructSimplestProj(duckdb::LogicalProjection &proj_op,
 
   std::vector<std::unique_ptr<SimplestAttr>> target_list;
   for (const auto &expr : proj_op.expressions) {
-    auto table_expr = GetConstTableExpr(expr);
+#ifdef DEBUG
+    D_ASSERT(ExpressionType::BOUND_COLUMN_REF == expr->type);
+#endif
+    auto &column_ref_expr = expr->Cast<duckdb::BoundColumnRefExpression>();
     // Resolve binding index to actual column index
     auto actual_column_idx =
-        ResolveDuckDBColumnIndex(table_expr.table_idx, table_expr.column_idx);
+        ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
+                                 column_ref_expr.binding.column_index);
     // Get the correct column name from the base table schema
-    std::string actual_column_name = table_expr.column_name;
+    std::string actual_column_name = column_ref_expr.alias;
     auto simplest_target = std::make_unique<SimplestAttr>(
-        ConvertVarType(table_expr.return_type), table_expr.table_idx,
-        actual_column_idx, actual_column_name);
+        ConvertVarType(column_ref_expr.return_type),
+        column_ref_expr.binding.table_index, actual_column_idx,
+        actual_column_name);
     target_list.emplace_back(std::move(simplest_target));
   }
   auto base_stmt = std::make_unique<SimplestStmt>(
@@ -411,26 +422,36 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
     auto comp_type = ConvertCompType(cond.comparison);
     const auto &left_cond = cond.left;
     auto left_type = ConvertVarType(left_cond->return_type);
-    auto left_expr_info = GetConstTableExpr(left_cond);
+#ifdef DEBUG
+    D_ASSERT(ExpressionType::BOUND_COLUMN_REF == left_cond->type);
+#endif
+    auto &column_ref_left_cond =
+        left_cond->Cast<duckdb::BoundColumnRefExpression>();
     // Resolve binding index to actual column index
-    auto left_actual_col_idx = ResolveDuckDBColumnIndex(
-        left_expr_info.table_idx, left_expr_info.column_idx);
+    auto left_actual_col_idx =
+        ResolveDuckDBColumnIndex(column_ref_left_cond.binding.table_index,
+                                 column_ref_left_cond.binding.column_index);
     // Get the correct column name from the base table schema
-    std::string left_actual_col_name = left_expr_info.column_name;
+    std::string left_actual_col_name = column_ref_left_cond.alias;
     auto left_simplest_cond = std::make_unique<SimplestAttr>(
-        left_type, left_expr_info.table_idx, left_actual_col_idx,
-        left_actual_col_name);
+        left_type, column_ref_left_cond.binding.table_index,
+        left_actual_col_idx, left_actual_col_name);
     const auto &right_cond = cond.right;
     auto right_type = ConvertVarType(right_cond->return_type);
-    auto right_expr_info = GetConstTableExpr(right_cond);
+#ifdef DEBUG
+    D_ASSERT(ExpressionType::BOUND_COLUMN_REF == right_cond->type);
+#endif
+    auto &column_ref_right_cond =
+        right_cond->Cast<duckdb::BoundColumnRefExpression>();
     // Resolve binding index to actual column index
-    auto right_actual_col_idx = ResolveDuckDBColumnIndex(
-        right_expr_info.table_idx, right_expr_info.column_idx);
+    auto right_actual_col_idx =
+        ResolveDuckDBColumnIndex(column_ref_right_cond.binding.table_index,
+                                 column_ref_right_cond.binding.column_index);
     // Get the correct column name from the base table schema
-    std::string right_actual_col_name = right_expr_info.column_name;
+    std::string right_actual_col_name = column_ref_right_cond.alias;
     auto right_simplest_cond = std::make_unique<SimplestAttr>(
-        right_type, right_expr_info.table_idx, right_actual_col_idx,
-        right_actual_col_name);
+        right_type, column_ref_right_cond.binding.table_index,
+        right_actual_col_idx, right_actual_col_name);
 #ifdef DEBUG
     D_ASSERT(left_type == right_type);
 #endif
@@ -713,9 +734,9 @@ duckdb::column_t DuckToIR::ResolveDuckDBColumnIndex(duckdb::idx_t table_idx,
                                                     duckdb::idx_t binding_idx) {
   auto it = table_column_ids_map.find(table_idx);
   if (it == table_column_ids_map.end() || binding_idx >= it->second.size()) {
-    std::runtime_error("Didn't find the column index mapping of (" +
-                       std::to_string(table_idx) + ", " +
-                       std::to_string(binding_idx) + ")");
+    throw std::runtime_error("Didn't find the column index mapping of (" +
+                             std::to_string(table_idx) + ", " +
+                             std::to_string(binding_idx) + ")");
   }
   auto column_id = compat::GetColumnId(it->second[binding_idx]);
   if (column_id == duckdb::COLUMN_IDENTIFIER_ROW_ID) {
@@ -727,17 +748,22 @@ duckdb::column_t DuckToIR::ResolveDuckDBColumnIndex(duckdb::idx_t table_idx,
 
 std::unique_ptr<SimplestAttr>
 DuckToIR::ConvertAttr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
-  duckdb::TableExpr table_expr = GetConstTableExpr(expr);
+#ifdef DEBUG
+  D_ASSERT(ExpressionType::BOUND_COLUMN_REF == expr->type);
+#endif
+  auto &column_ref_expr = expr->Cast<duckdb::BoundColumnRefExpression>();
   // Resolve binding index to actual column index using column_ids mapping
   auto actual_column_idx =
-      ResolveDuckDBColumnIndex(table_expr.table_idx, table_expr.column_idx);
+      ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
+                               column_ref_expr.binding.column_index);
 
   // Get the correct column name from the base table schema
-  std::string actual_column_name = table_expr.column_name;
+  std::string actual_column_name = column_ref_expr.alias;
 
   auto simplest_attr = std::make_unique<SimplestAttr>(
-      ConvertVarType(table_expr.return_type), table_expr.table_idx,
-      actual_column_idx, actual_column_name);
+      ConvertVarType(column_ref_expr.return_type),
+      column_ref_expr.binding.table_index, actual_column_idx,
+      actual_column_name);
   return simplest_attr;
 }
 
@@ -851,31 +877,42 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
     // Right side can be BOUND_CONSTANT or BOUND_CAST wrapping a BOUND_CONSTANT
     duckdb::BoundConstantExpression *const_expr_ptr = nullptr;
     if (comparison_expr.right->expression_class ==
-        duckdb::ExpressionClass::BOUND_CONSTANT) {
-      const_expr_ptr =
-          &comparison_expr.right->Cast<duckdb::BoundConstantExpression>();
-    } else if (comparison_expr.right->expression_class ==
-               duckdb::ExpressionClass::BOUND_CAST) {
-      // Unwrap CAST to get the underlying constant
-      auto &cast_expr =
-          comparison_expr.right->Cast<duckdb::BoundCastExpression>();
-      D_ASSERT(cast_expr.child->expression_class ==
-               duckdb::ExpressionClass::BOUND_CONSTANT);
-      const_expr_ptr =
-          &cast_expr.child->Cast<duckdb::BoundConstantExpression>();
+        duckdb::ExpressionClass::BOUND_COLUMN_REF) {
+      auto right_simplest_attr = ConvertAttr(comparison_expr.right);
+      auto simplest_var_comp = std::make_unique<SimplestVarComparison>(
+          ConvertCompType(expr->type), std::move(left_simplest_attr),
+          std::move(right_simplest_attr));
+      return unique_ptr_cast<SimplestVarComparison, SimplestExpr>(
+          std::move(simplest_var_comp));
     } else {
-      duckdb::Printer::Print(duckdb::StringUtil::Format(
-          "Unsupported right expression class in comparison: %d",
-          static_cast<int>(comparison_expr.right->expression_class)));
-      D_ASSERT(false);
-    }
-    auto right_simplest_attr = ConvertConstVar(const_expr_ptr->value);
+      if (comparison_expr.right->expression_class ==
+          duckdb::ExpressionClass::BOUND_CONSTANT) {
+        const_expr_ptr =
+            &comparison_expr.right->Cast<duckdb::BoundConstantExpression>();
+      } else if (comparison_expr.right->expression_class ==
+                 duckdb::ExpressionClass::BOUND_CAST) {
+        // Unwrap CAST to get the underlying constant
+        auto &cast_expr =
+            comparison_expr.right->Cast<duckdb::BoundCastExpression>();
+        D_ASSERT(cast_expr.child->expression_class ==
+                 duckdb::ExpressionClass::BOUND_CONSTANT);
+        const_expr_ptr =
+            &cast_expr.child->Cast<duckdb::BoundConstantExpression>();
+      } else {
+        duckdb::Printer::Print(duckdb::StringUtil::Format(
+            "Unsupported right expression class in comparison: %d",
+            static_cast<int>(comparison_expr.right->expression_class)));
+        D_ASSERT(false);
+      }
+      auto right_simplest_attr = ConvertConstVar(const_expr_ptr->value);
 
-    auto simplest_var_const_comp = std::make_unique<SimplestVarConstComparison>(
-        ConvertCompType(expr->type), std::move(left_simplest_attr),
-        std::move(right_simplest_attr));
-    return unique_ptr_cast<SimplestVarConstComparison, SimplestExpr>(
-        std::move(simplest_var_const_comp));
+      auto simplest_var_const_comp =
+          std::make_unique<SimplestVarConstComparison>(
+              ConvertCompType(expr->type), std::move(left_simplest_attr),
+              std::move(right_simplest_attr));
+      return unique_ptr_cast<SimplestVarConstComparison, SimplestExpr>(
+          std::move(simplest_var_const_comp));
+    }
   }
   case duckdb::ExpressionType::CONJUNCTION_AND:
   case duckdb::ExpressionType::CONJUNCTION_OR: {
@@ -1009,15 +1046,20 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
     break;
   }
   case duckdb::ExpressionType::BOUND_COLUMN_REF: {
-    duckdb::TableExpr table_expr = GetConstTableExpr(expr);
+#ifdef DEBUG
+    D_ASSERT(ExpressionType::BOUND_COLUMN_REF == expr->type);
+#endif
+    auto &column_ref_expr = expr->Cast<duckdb::BoundColumnRefExpression>();
     // Resolve binding index to actual column index
     auto actual_column_idx =
-        ResolveDuckDBColumnIndex(table_expr.table_idx, table_expr.column_idx);
+        ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
+                                 column_ref_expr.binding.column_index);
     // Get the correct column name from the base table schema
-    std::string actual_column_name = table_expr.column_name;
+    std::string actual_column_name = column_ref_expr.alias;
     auto simplest_attr = std::make_unique<SimplestAttr>(
-        ConvertVarType(table_expr.return_type), table_expr.table_idx,
-        actual_column_idx, actual_column_name);
+        ConvertVarType(column_ref_expr.return_type),
+        column_ref_expr.binding.table_index, actual_column_idx,
+        actual_column_name);
     auto simplest_attr_expr =
         std::make_unique<SimplestSingleAttrExpr>(std::move(simplest_attr));
     return unique_ptr_cast<SimplestSingleAttrExpr, SimplestExpr>(
