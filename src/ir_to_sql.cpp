@@ -129,7 +129,7 @@ void IRToSQLConverter::GenerateSQL(SimplestStmt &op) {
             std::string select_str = table_name + "." + actual_col_name;
             select_str = agg_fn_type + "(" + select_str + ")";
             // Generate unique alias: table_name + "_" + column_name
-            alias_name = table_names[table_idx] + "_" + orig_col_name;
+            alias_name = table_names[table_idx] + "_" + std::to_string(table_idx) + "_" + orig_col_name;
             select_str += " AS " + alias_name;
             select_field.emplace_back(select_str);
           } else if (target_table_index == agg_op.GetGroupIndex()) {
@@ -146,7 +146,7 @@ void IRToSQLConverter::GenerateSQL(SimplestStmt &op) {
                 GetActualColumnName(table_idx, col_idx, orig_col_name);
             std::string select_str = table_name + "." + actual_col_name;
             // Generate unique alias: table_name + "_" + column_name
-            alias_name = table_names[table_idx] + "_" + orig_col_name;
+            alias_name = table_names[table_idx] + "_" + std::to_string(table_idx) + "_" + orig_col_name;
             select_str += " AS " + alias_name;
             group_by_field.emplace_back(select_str);
           } else {
@@ -181,7 +181,7 @@ void IRToSQLConverter::GenerateSQL(SimplestStmt &op) {
           assert(false);
         }
         // Generate unique alias: table_name + "_" + column_name
-        alias_name = table_names[target_table_index] + "_" + orig_col_name;
+        alias_name = table_names[target_table_index] + "_" + std::to_string(target_table_index) + "_" + orig_col_name;
         select_str += " AS " + alias_name;
         select_field.emplace_back(select_str);
       }

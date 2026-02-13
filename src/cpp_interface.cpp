@@ -20,8 +20,6 @@ bool InitSchemaParser(const std::string &schema_path) {
               << schema_path << std::endl;
     return false;
   }
-  std::cout << "[IR_SQL_Converter] Schema loaded from: " << schema_path
-            << std::endl;
   return true;
 }
 

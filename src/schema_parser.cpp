@@ -116,9 +116,6 @@ bool SchemaParser::LoadFromString(const std::string &schema_sql) {
     tables_[Normalize(table_name)] = std::move(schema);
     table_count++;
   }
-
-  std::cout << "[SchemaParser] Loaded " << table_count << " table(s)"
-            << std::endl;
   return table_count > 0;
 }
 
