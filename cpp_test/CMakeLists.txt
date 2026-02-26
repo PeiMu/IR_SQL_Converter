@@ -7,7 +7,7 @@ add_executable(Test_IR_SQL_Converter_CPP_PG cpp_test_pg.cpp)
 add_executable(Test_IR_SQL_Converter_CPP_DuckDB cpp_test_duckdb.cpp)
 
 # libpg_query
-set(LIBPG_QUERY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../libpg_query" CACHE PATH "libpg_query source path")
+set(LIBPG_QUERY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../libpg_query" CACHE PATH "libpg_query source path")
 if(EXISTS ${LIBPG_QUERY_ROOT})
     message(STATUS "Found libpg_query at: ${LIBPG_QUERY_ROOT}")
 
@@ -23,7 +23,7 @@ else()
 endif()
 
 # DuckDB
-set(DUCKDB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../duckdb_132" CACHE PATH "DuckDB source path")
+set(DUCKDB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../duckdb_132" CACHE PATH "DuckDB source path")
 if(EXISTS ${DUCKDB_ROOT})
     message(STATUS "Found DuckDB source at: ${DUCKDB_ROOT}")
 

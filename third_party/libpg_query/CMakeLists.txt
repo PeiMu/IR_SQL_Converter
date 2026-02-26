@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.0)
+cmake_minimum_required(VERSION 3.10)
 
 project(lib_pg_query CXX C)
 if(POLICY CMP0063)
