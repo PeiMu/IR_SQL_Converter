@@ -106,7 +106,7 @@ public:
     return reinterpret_cast<const TARGET &>(*this);
   }
 
-  virtual std::string Print(bool print = true) = 0;
+  virtual std::string Print(bool print = true, int depth = 0) = 0;
 
   SimplestNodeType GetNodeType() const { return node_type; }
 
@@ -127,7 +127,7 @@ public:
 
   ~SimplestLiteral() override = default;
 
-  std::string Print(bool print = true) override {
+  std::string Print(bool print = true, int depth = 0) override {
     std::string str = " \"" + literal_value + "\" ";
     if (print)
       std::cout << str << std::endl;
@@ -161,7 +161,7 @@ public:
 
   bool IsConst() { return is_const; }
 
-  virtual std::string Print(bool print = true) override = 0;
+  std::string Print(bool print = true, int depth = 0) override = 0;
 
 private:
   SimplestVarType type;
@@ -212,7 +212,7 @@ public:
 
   std::vector<std::string> GetStringVecValue() const { return str_vec_value; }
 
-  std::string Print(bool print = true) override {
+  std::string Print(bool print = true, int depth = 0) override {
     std::string str;
     switch (GetType()) {
     case InvalidVarType:
@@ -283,7 +283,7 @@ public:
     column_name = std::move(col_name);
   }
 
-  std::string Print(bool print = true) override {
+  std::string Print(bool print = true, int depth = 0) override {
     std::string str;
     switch (GetType()) {
     case InvalidVarType:
@@ -354,7 +354,7 @@ public:
 
   unsigned int GetParamId() const { return param_id; }
 
-  std::string Print(bool print = true) override {
+  std::string Print(bool print = true, int depth = 0) override {
     std::string str;
     switch (GetType()) {
     case InvalidVarType:
@@ -405,7 +405,7 @@ public:
 
   SimplestExprType GetSimplestExprType() const { return expr_type; }
 
-  virtual std::string Print(bool print = true) override = 0;
+  virtual std::string Print(bool print = true, int depth = 0) override = 0;
 
 private:
   SimplestExprType expr_type;
@@ -428,7 +428,7 @@ public:
 
   ~SimplestVarComparison() override = default;
 
-  std::string Print(bool print = true) override {
+  std::string Print(bool print = true, int depth = 0) override {
     std::string str;
     std::string comparison_op;
     switch (GetSimplestExprType()) {
@@ -470,7 +470,6 @@ public:
     str = left_attr->Print(false);
     str += comparison_op;
     str += right_attr->Print(false);
-    str += "\n";
 
     if (print)
       std::cout << str << std::endl;
@@ -501,7 +500,7 @@ public:
 
   ~SimplestVarParamComparison() override = default;
 
-  std::string Print(bool print = true) override {
+  std::string Print(bool print = true, int depth = 0) override {
     std::string str;
     std::string comparison_op;
     switch (GetSimplestExprType()) {
@@ -544,7 +543,6 @@ public:
     str = attr->Print(false);
     str += comparison_op;
     str += param_var->Print(false);
-    str += "\n";
 
     if (print)
       std::cout << str << std::endl;
@@ -575,7 +573,7 @@ public:
 
   ~SimplestVarConstComparison() override = default;
 
-  std::string Print(bool print = true) override {
+  std::string Print(bool print = true, int depth = 0) override {
     std::string str;
     std::string comparison_op;
     switch (GetSimplestExprType()) {
@@ -618,7 +616,6 @@ public:
     str = attr->Print(false);
     str += comparison_op;
     str += const_var->Print(false);
-    str += "\n";
 
     if (print)
       std::cout << str << std::endl;
@@ -646,7 +643,7 @@ public:
 
   ~SimplestIsNullExpr() override = default;
 
-  std::string Print(bool print = true) override {
+  std::string Print(bool print = true, int depth = 0) override {
     std::string str;
     std::string is_null_op;
     switch (GetSimplestExprType()) {
@@ -675,7 +672,6 @@ public:
 
     str = attr->Print(false);
     str += is_null_op;
-    str += "\n";
 
     if (print)
       std::cout << str << std::endl;
@@ -709,7 +705,7 @@ public:
 
   SimplestLogicalOp GetLogicalOp() const { return logical_op; }
 
-  std::string Print(bool print = true) override {
+  std::string Print(bool print = true, int depth = 0) override {
     std::string str;
     std::string logical_op_str;
     switch (GetLogicalOp()) {
@@ -733,7 +729,6 @@ public:
     }
     str += logical_op_str;
     str += right_expr->Print(false);
-    str += "\n";
 
     if (print)
       std::cout << str << std::endl;
@@ -765,11 +760,10 @@ public:
 
   ~SimplestSingleAttrExpr() override = default;
 
-  std::string Print(bool print = true) override {
+  std::string Print(bool print = true, int depth = 0) override {
     std::string str;
     str = "SingleAttrExpr: ";
     str += attr->Print(false);
-    str += "\n";
 
     if (print)
       std::cout << str << std::endl;
@@ -826,29 +820,24 @@ public:
   uint64_t GetEstimatedCardinality() const { return estimated_cardinality; }
   void SetEstimatedCardinality(uint64_t card) { estimated_cardinality = card; }
 
-  std::string Print(bool print = true) override {
+  std::string Print(bool print = true, int depth = 0) override {
     std::string str;
-
-    str = "\nTarget List:";
-    for (const auto &i : target_list) {
-      str += "\n" + i->Print(false);
-    }
+    std::string indent(depth * 2, ' ');
 
     if (!qual_vec.empty()) {
-      str += "\nCondition:";
+      str += " [";
       for (const auto &qual : qual_vec) {
-        str += "\n" + qual->Print(false);
+        str += qual->Print(false);
       }
+      str += "]";
     }
 
     for (size_t i = 0; i < children.size(); i++) {
       if (children[i]) {
-        str += "\nchild[" + std::to_string(i) + "]:";
-        str += children[i]->Print(false);
+        str += "\n" + indent + "  -> ";
+        str += children[i]->Print(false, depth + 1);
       }
     }
-
-    str += "\n";
 
     return str;
   };
@@ -877,14 +866,19 @@ public:
 
   unsigned int GetIndex() const { return table_index; }
 
-  std::string Print(bool print = true) override {
-    std::string str = "\n";
-    str += "╔══════════════════╗\n";
-    str += "Projection: " + std::to_string(table_index);
-
-    str += SimplestStmt::Print(false);
-
-    str += "╚══════════════════╝\n";
+  std::string Print(bool print = true, int depth = 0) override {
+    std::string str = "Projection";
+    if (depth == 0 && !target_list.empty()) {
+      str += " [";
+      bool first = true;
+      for (const auto &t : target_list) {
+        if (!first) str += ", ";
+        str += t->Print(false);
+        first = false;
+      }
+      str += "]";
+    }
+    str += SimplestStmt::Print(false, depth);
 
     if (print)
       std::cout << str << std::endl;
@@ -930,51 +924,48 @@ public:
 
   ~SimplestAggregate() override = default;
 
-  std::string Print(bool print = true) override {
-    std::string str = "\n";
+  std::string Print(bool print = true, int depth = 0) override {
+    std::string str = "Aggregate";
 
-    std::string agg_fn_str = "\n";
+    str += " [";
+    bool first = true;
     for (const auto &agg_fn : agg_fns) {
+      if (!first) str += ", ";
+      first = false;
       switch (agg_fn.second) {
       case SimplestAggFnType::InvalidAggType:
         std::cout << "Invalid expr Type!!!" << std::endl;
         return str;
       case SimplestAggFnType::Min:
-        agg_fn_str += "min(";
+        str += "min(";
         break;
       case SimplestAggFnType::Max:
-        agg_fn_str += "min(";
+        str += "max(";
         break;
       case SimplestAggFnType::Sum:
-        agg_fn_str += "min(";
+        str += "sum(";
         break;
       case SimplestAggFnType::Average:
-        agg_fn_str += "avg(";
+        str += "avg(";
         break;
       }
-
-      agg_fn_str += agg_fn.first->Print(false);
-      agg_fn_str += ")\n";
+      str += agg_fn.first->Print(false);
+      str += ")";
     }
+    str += "]";
 
-    std::string group_by_str;
     if (!groups.empty()) {
-      group_by_str = "\nGroup By:\n";
+      str += " Group By [";
+      bool first_group = true;
       for (const auto &group : groups) {
-        group_by_str += group->Print(false);
-        group_by_str += "\n";
+        if (!first_group) str += ", ";
+        first_group = false;
+        str += group->Print(false);
       }
+      str += "]";
     }
 
-    str += "╔══════════════════╗\n";
-
-    str += "Aggregate:\n";
-    str += agg_fn_str;
-    str += group_by_str;
-
-    str += SimplestStmt::Print(false);
-
-    str += "╚══════════════════╝\n";
+    str += SimplestStmt::Print(false, depth);
 
     if (print)
       std::cout << str << std::endl;
@@ -1009,7 +1000,7 @@ public:
 
   ~SimplestOrderBy() override = default;
 
-  std::string Print(bool print = true) override {
+  std::string Print(bool print = true, int depth = 0) override {
     std::string str = "\n";
 
     std::string order_str = "\n";
@@ -1030,14 +1021,10 @@ public:
       }
       order_str += "\n";
     }
-    str += "╔══════════════════╗\n";
-
     str += "Order By:\n";
     str += order_str;
 
-    str += SimplestStmt::Print(false);
-
-    str += "╚══════════════════╝\n";
+    str += SimplestStmt::Print(false, depth);
 
     if (print)
       std::cout << str << std::endl;
@@ -1063,7 +1050,7 @@ public:
 
   ~SimplestLimit() override = default;
 
-  std::string Print(bool print = true) override {
+  std::string Print(bool print = true, int depth = 0) override {
     std::string str = "\n";
 
     std::string limit_str = "\n";
@@ -1094,14 +1081,10 @@ public:
       }
     }
 
-    str += "╔══════════════════╗\n";
-
     str += "Limit:\n";
     str += limit_str;
 
-    str += SimplestStmt::Print(false);
-
-    str += "╚══════════════════╝\n";
+    str += SimplestStmt::Print(false, depth);
 
     if (print)
       std::cout << str << std::endl;
@@ -1149,9 +1132,8 @@ public:
   unsigned int GetMarkIndex() const { return mark_index; }
   void SetMarkIndex(unsigned int idx) { mark_index = idx; }
 
-  std::string Print(bool print = true) override {
-    std::string str = "\n";
-    str += "╔══════════════════╗\n";
+  std::string Print(bool print = true, int depth = 0) override {
+    std::string str;
 
     switch (join_type) {
     case InvalidJoinType:
@@ -1185,16 +1167,20 @@ public:
       str += "UniqueInner";
       break;
     }
-    str += " Join:";
+    str += " Join";
 
-    str += "\nJoin Condition:\n";
-    for (const auto &cond : join_conditions) {
-      str += cond->Print(false);
+    if (!join_conditions.empty()) {
+      str += " [";
+      bool first = true;
+      for (const auto &cond : join_conditions) {
+        if (!first) str += "; ";
+        str += cond->Print(false);
+        first = false;
+      }
+      str += "]";
     }
 
-    str += SimplestStmt::Print(false);
-
-    str += "╚══════════════════╝\n";
+    str += SimplestStmt::Print(false, depth);
 
     if (print)
       std::cout << str << std::endl;
@@ -1216,15 +1202,10 @@ public:
 
   ~SimplestCrossProduct() override = default;
 
-  std::string Print(bool print = true) override {
-    std::string str = "\n";
-    str += "╔══════════════════╗\n";
+  std::string Print(bool print = true, int depth = 0) override {
+    std::string str = "CrossProduct";
 
-    str += "CrossProduct:\n";
-
-    str += SimplestStmt::Print(false);
-
-    str += "╚══════════════════╝\n";
+    str += SimplestStmt::Print(false, depth);
 
     if (print)
       std::cout << str << std::endl;
@@ -1252,19 +1233,9 @@ public:
 
   ~SimplestFilter() override = default;
 
-  std::string Print(bool print = true) override {
-    std::string str = "\n";
-    str += "╔══════════════════╗\n";
-
-    str += "Filter:";
-
-    //		str += "\nFilter Condition:\n";
-    //		for (const auto &cond : filter_conditions) {
-    //			str += cond->Print(false);
-    //		}
-
-    str += SimplestStmt::Print(false);
-    str += "╚══════════════════╝\n";
+  std::string Print(bool print = true, int depth = 0) override {
+    std::string str = "Filter";
+    str += SimplestStmt::Print(false, depth);
 
     if (print)
       std::cout << str << std::endl;
@@ -1291,16 +1262,9 @@ public:
 
   void SetTableName(std::string tbl_name) { table_name = std::move(tbl_name); }
 
-  std::string Print(bool print = true) override {
-    std::string str = "\n";
-    str += "╔══════════════════╗\n";
-
-    str += "Table Scan \"" + table_name +
-           "\" (index=" + std::to_string(table_index) + "):";
-    str += " (card=" + std::to_string(GetEstimatedCardinality()) + ")";
-
-    str += SimplestStmt::Print(false);
-    str += "╚══════════════════╝\n";
+  std::string Print(bool print = true, int depth = 0) override {
+    std::string str = "Table Scan \"" + table_name +
+           "\" (index=" + std::to_string(table_index) + ")";
 
     if (print)
       std::cout << str << std::endl;
@@ -1328,7 +1292,7 @@ public:
 
   std::vector<std::string> GetContents() const { return contents; }
 
-  std::string Print(bool print = true) override {
+  std::string Print(bool print = true, int depth = 0) override {
     std::string str = "\n";
     str += "╔══════════════════╗\n";
 
@@ -1379,7 +1343,7 @@ public:
 
   ~SimplestHash() override = default;
 
-  std::string Print(bool print = true) override {
+  std::string Print(bool print = true, int depth = 0) override {
     std::string str = "\n";
     str += "╔══════════════════╗\n";
 
@@ -1388,7 +1352,7 @@ public:
       str += "\n" + hk->Print(false);
     }
 
-    str += SimplestStmt::Print(false);
+    str += SimplestStmt::Print(false, depth);
     str += "╚══════════════════╝\n";
 
     if (print)
@@ -1422,7 +1386,7 @@ public:
     return order_struct_vec;
   };
 
-  std::string Print(bool print = true) override {
+  std::string Print(bool print = true, int depth = 0) override {
     std::string str = "\n";
     str += "╔══════════════════╗\n";
 
@@ -1469,7 +1433,7 @@ public:
       str += "\n";
     }
 
-    str += SimplestStmt::Print(false);
+    str += SimplestStmt::Print(false, depth);
     str += "╚══════════════════╝\n";
 
     if (print)
