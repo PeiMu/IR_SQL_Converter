@@ -872,7 +872,8 @@ public:
       str += " [";
       bool first = true;
       for (const auto &t : target_list) {
-        if (!first) str += ", ";
+        if (!first)
+          str += ", ";
         str += t->Print(false);
         first = false;
       }
@@ -930,7 +931,8 @@ public:
     str += " [";
     bool first = true;
     for (const auto &agg_fn : agg_fns) {
-      if (!first) str += ", ";
+      if (!first)
+        str += ", ";
       first = false;
       switch (agg_fn.second) {
       case SimplestAggFnType::InvalidAggType:
@@ -958,7 +960,8 @@ public:
       str += " Group By [";
       bool first_group = true;
       for (const auto &group : groups) {
-        if (!first_group) str += ", ";
+        if (!first_group)
+          str += ", ";
         first_group = false;
         str += group->Print(false);
       }
@@ -1173,7 +1176,8 @@ public:
       str += " [";
       bool first = true;
       for (const auto &cond : join_conditions) {
-        if (!first) str += "; ";
+        if (!first)
+          str += "; ";
         str += cond->Print(false);
         first = false;
       }
@@ -1264,7 +1268,7 @@ public:
 
   std::string Print(bool print = true, int depth = 0) override {
     std::string str = "Table Scan \"" + table_name +
-           "\" (index=" + std::to_string(table_index) + ")";
+                      "\" (index=" + std::to_string(table_index) + ")";
 
     if (print)
       std::cout << str << std::endl;
@@ -1285,36 +1289,45 @@ public:
                 unsigned int table_index, std::vector<std::string> contents)
       : SimplestStmt(std::move(base_stmt), ChunkNode), table_index(table_index),
         contents(contents) {};
+  SimplestChunk(std::unique_ptr<SimplestStmt> base_stmt,
+                unsigned int table_index, std::string chunk_name,
+                std::vector<std::string> contents)
+      : SimplestStmt(std::move(base_stmt), ChunkNode), table_index(table_index),
+        chunk_name(chunk_name), contents(contents) {};
 
   ~SimplestChunk() override = default;
 
   unsigned int GetTableIndex() const { return table_index; }
 
+  std::string GetChunkName() const { return chunk_name; }
+  void SetChunkName(std::string name) { chunk_name = name; }
+
   std::vector<std::string> GetContents() const { return contents; }
 
   std::string Print(bool print = true, int depth = 0) override {
-    std::string str = "\n";
-    str += "╔══════════════════╗\n";
-
-    str += "Chunk: " + std::to_string(GetTableIndex()) + "\n";
-    str += " (card=" + std::to_string(GetEstimatedCardinality()) + ")\n";
+    std::string str = "Data Chunk ";
+    if (!chunk_name.empty()) {
+      str += "\"" + chunk_name + "\" ";
+    }
+    str += "(index=" + std::to_string(table_index) + ") ";
+    str += "(card=" + std::to_string(GetEstimatedCardinality()) + ") ";
     if (contents.size() > 10) {
+      str += "\ncontent[";
       for (size_t i = 0; i < 10; i++) {
         str += contents[i];
         str += ", ";
       }
       str += "...";
-    } else {
+      str += "]";
+    } else if (!contents.empty()) {
+      str += "\ncontent[";
       for (const auto &content : contents) {
         str += content;
         str += ", ";
       }
-      if (!contents.empty()) {
-        str.erase(str.size() - 2);
-      }
+      str.erase(str.size() - 2);
+      str += "]";
     }
-
-    str += "\n╚══════════════════╝\n";
 
     if (print)
       std::cout << str << std::endl;
@@ -1326,6 +1339,7 @@ private:
   // todo: there might be other types
   unsigned int table_index;
   std::vector<std::string> contents;
+  std::string chunk_name;
 };
 
 class SimplestHash : public SimplestStmt {

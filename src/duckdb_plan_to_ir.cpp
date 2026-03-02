@@ -98,22 +98,24 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
         if (embed_intermediate_data) {
           std::cout << "cross engine\n";
           // Cross-engine: embed actual data in SimplestChunk
-          auto simplest_chunk = ConstructSimplestChunk(column_data_get_op);
+          auto simplest_chunk = ConstructSimplestChunk(column_data_get_op,
+                                                       intermediate_table_map);
           result = unique_ptr_cast<SimplestChunk, SimplestStmt>(
               std::move(simplest_chunk));
         } else {
           std::cout << "same engine\n";
           // Same-engine: create SimplestChunk with empty contents
           // The engine will provide the data at execution time
-          auto simplest_chunk =
-              ConstructSimplestChunkPlaceholder(column_data_get_op);
+          auto simplest_chunk = ConstructSimplestChunkPlaceholder(
+              column_data_get_op, intermediate_table_map);
           result = unique_ptr_cast<SimplestChunk, SimplestStmt>(
               std::move(simplest_chunk));
         }
       } else {
         std::cout << "embed data\n";
         // IN-clause constant list - always embed data
-        auto simplest_chunk = ConstructSimplestChunk(column_data_get_op);
+        auto simplest_chunk =
+            ConstructSimplestChunk(column_data_get_op, intermediate_table_map);
         result = unique_ptr_cast<SimplestChunk, SimplestStmt>(
             std::move(simplest_chunk));
       }
@@ -559,11 +561,18 @@ DuckToIR::ConstructSimplestScan(duckdb::LogicalColumnDataGet &get_op,
 }
 
 std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunk(
-    duckdb::LogicalColumnDataGet &column_data_get_op) {
+    duckdb::LogicalColumnDataGet &column_data_get_op,
+    const std::unordered_map<unsigned int, std::string>
+        &intermediate_table_map) {
   std::vector<std::string> chunk_contents;
   duckdb::DataChunk chunk;
 
   auto table_index = column_data_get_op.table_index;
+  std::string chunk_name;
+  if (intermediate_table_map.find(table_index) !=
+      intermediate_table_map.end()) {
+    chunk_name = intermediate_table_map.at(table_index);
+  }
 
   column_data_get_op.collection->InitializeScanChunk(chunk);
   duckdb::ColumnDataScanState scan_state;
@@ -601,14 +610,24 @@ std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunk(
       std::move(target_list), std::move(qual_vec), SimplestNodeType::ChunkNode);
   auto simplest_chunk = std::make_unique<SimplestChunk>(
       std::move(base_stmt), column_data_get_op.table_index, chunk_contents);
+  if (!chunk_name.empty()) {
+    simplest_chunk->SetChunkName(chunk_name);
+  }
   return simplest_chunk;
 }
 
 std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunkPlaceholder(
-    duckdb::LogicalColumnDataGet &column_data_get_op) {
+    duckdb::LogicalColumnDataGet &column_data_get_op,
+    const std::unordered_map<unsigned int, std::string>
+        &intermediate_table_map) {
   // Create a placeholder SimplestChunk for intermediate results (same-engine)
   // Contents are empty, but target_list has column type info for reconstruction
   auto table_index = column_data_get_op.table_index;
+  std::string chunk_name;
+  if (intermediate_table_map.find(table_index) !=
+      intermediate_table_map.end()) {
+    chunk_name = intermediate_table_map.at(table_index);
+  }
   uint64_t estimated_card = column_data_get_op.EstimateCardinality(context);
 
   // Register column mapping
@@ -637,6 +656,9 @@ std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunkPlaceholder(
       std::move(target_list), std::move(qual_vec), SimplestNodeType::ChunkNode);
   auto simplest_chunk = std::make_unique<SimplestChunk>(
       std::move(base_stmt), table_index, empty_contents);
+  if (!chunk_name.empty()) {
+    simplest_chunk->SetChunkName(chunk_name);
+  }
   simplest_chunk->SetEstimatedCardinality(estimated_card);
   return simplest_chunk;
 }

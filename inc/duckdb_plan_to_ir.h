@@ -72,11 +72,15 @@ private:
   ConstructSimplestScan(duckdb::LogicalColumnDataGet &get_op,
                         const std::string &intermediate_table_name);
   std::unique_ptr<SimplestChunk>
-  ConstructSimplestChunk(duckdb::LogicalColumnDataGet &column_data_get_op);
+  ConstructSimplestChunk(duckdb::LogicalColumnDataGet &column_data_get_op,
+                         const std::unordered_map<unsigned int, std::string>
+                             &intermediate_table_map);
   // Create a placeholder SimplestChunk for intermediate results (same-engine)
   // Contents are empty, but target_list has column type info
   std::unique_ptr<SimplestChunk> ConstructSimplestChunkPlaceholder(
-      duckdb::LogicalColumnDataGet &column_data_get_op);
+      duckdb::LogicalColumnDataGet &column_data_get_op,
+      const std::unordered_map<unsigned int, std::string>
+          &intermediate_table_map);
   std::unique_ptr<SimplestCrossProduct>
   ConstructSimplestCrossProduct(duckdb::LogicalCrossProduct &cross_product_op,
                                 std::unique_ptr<SimplestStmt> left_child,
