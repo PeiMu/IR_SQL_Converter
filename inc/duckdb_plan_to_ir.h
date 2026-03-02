@@ -49,11 +49,13 @@ public:
       : binder(binder), context(context) {};
   ~DuckToIR() = default;
 
-  std::unique_ptr<SimplestStmt>
-  ConstructSimplestStmt(duckdb::LogicalOperator *duckdb_plan_pointer,
-                        const std::unordered_map<unsigned int, std::string>
-                            &intermediate_table_map,
-                        bool embed_intermediate_data = false);
+  std::unique_ptr<SimplestStmt> ConstructSimplestStmt(
+      duckdb::LogicalOperator *duckdb_plan_pointer,
+      const std::unordered_map<unsigned int, std::string>
+          &intermediate_table_map,
+      bool embed_intermediate_data = false,
+      const std::unordered_map<unsigned int, std::vector<std::string>>
+          *chunk_col_names = nullptr);
 
 private:
   std::unique_ptr<SimplestProjection>
@@ -119,11 +121,32 @@ private:
   CollectScanFilter(const std::unique_ptr<duckdb::TableFilter> &filter_cond,
                     std::unique_ptr<SimplestAttr> var_attr);
 
+  // Resolve column name: use chunk_col_names_ for CHUNK_GET tables,
+  // fall back to alias for regular scan tables.
+  std::string ResolveColumnName(duckdb::idx_t table_idx,
+                                duckdb::column_t actual_col_idx,
+                                const std::string &alias) {
+    if (chunk_col_names_ == nullptr)
+      return alias;
+    auto it = chunk_col_names_->find(static_cast<unsigned int>(table_idx));
+    if (it == chunk_col_names_->end())
+      return alias;
+    const auto &names = it->second;
+    if (actual_col_idx < static_cast<duckdb::column_t>(names.size()))
+      return names[actual_col_idx];
+    return alias;
+  }
+
   duckdb::Binder &binder;
   duckdb::ClientContext &context;
 
   // <table id, column binding mapping: binding id -> actual id>
   std::unordered_map<duckdb::idx_t, compat::column_ids_vector_t>
       table_column_ids_map;
+
+  // Pointer to chunk table column names (set from ConvertDuckDBPlanToIR).
+  // Maps data_chunk_index → ordered column names as stored in the temp table.
+  const std::unordered_map<unsigned int, std::vector<std::string>>
+      *chunk_col_names_ = nullptr;
 };
 } // namespace ir_sql_converter

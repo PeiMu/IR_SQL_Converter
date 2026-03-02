@@ -53,7 +53,9 @@ std::unique_ptr<SimplestStmt> ConvertDuckDBPlanToIR(
     duckdb::Binder &binder, duckdb::ClientContext &context,
     duckdb::LogicalOperator *duckdb_plan_pointer,
     const std::unordered_map<unsigned int, std::string> &intermediate_table_map,
-    bool embed_intermediate_data = false);
+    bool embed_intermediate_data = false,
+    const std::unordered_map<unsigned int, std::vector<std::string>>
+        *chunk_col_names = nullptr);
 
 duckdb::unique_ptr<duckdb::LogicalOperator> ConvertIRToDuckDBPlan(
     duckdb::Binder &binder, duckdb::ClientContext &context,

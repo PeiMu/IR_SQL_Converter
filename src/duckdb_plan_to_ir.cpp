@@ -6,7 +6,10 @@ namespace ir_sql_converter {
 std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
     duckdb::LogicalOperator *duckdb_plan_pointer,
     const std::unordered_map<unsigned int, std::string> &intermediate_table_map,
-    bool embed_intermediate_data) {
+    bool embed_intermediate_data,
+    const std::unordered_map<unsigned int, std::vector<std::string>>
+        *chunk_col_names) {
+  chunk_col_names_ = chunk_col_names;
   std::function<std::unique_ptr<SimplestStmt>(duckdb::LogicalOperator *
                                               duckdb_plan_pointer)>
       iterate_plan;
@@ -170,8 +173,10 @@ DuckToIR::ConstructSimplestProj(duckdb::LogicalProjection &proj_op,
     auto actual_column_idx =
         ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
                                  column_ref_expr.binding.column_index);
-    // Get the correct column name from the base table schema
-    std::string actual_column_name = column_ref_expr.alias;
+    // Get the correct column name (use chunk_col_names_ for temp tables)
+    std::string actual_column_name =
+        ResolveColumnName(column_ref_expr.binding.table_index,
+                          actual_column_idx, column_ref_expr.alias);
     auto simplest_target = std::make_unique<SimplestAttr>(
         ConvertVarType(column_ref_expr.return_type),
         column_ref_expr.binding.table_index, actual_column_idx,
@@ -225,7 +230,8 @@ DuckToIR::ConstructSimplestAggGroup(duckdb::LogicalAggregate &agg_group_op,
     simplest_attr = std::make_unique<SimplestAttr>(
         ConvertVarType(column_ref_expr.return_type),
         column_ref_expr.binding.table_index, actual_col_idx,
-        column_ref_expr.alias);
+        ResolveColumnName(column_ref_expr.binding.table_index, actual_col_idx,
+                          column_ref_expr.alias));
     groups.emplace_back(std::move(simplest_attr));
   }
 
@@ -253,7 +259,8 @@ DuckToIR::ConstructSimplestAggGroup(duckdb::LogicalAggregate &agg_group_op,
       simplest_attr = std::make_unique<SimplestAttr>(
           ConvertVarType(column_ref_expr.return_type),
           column_ref_expr.binding.table_index, actual_col_idx,
-          column_ref_expr.alias);
+          ResolveColumnName(column_ref_expr.binding.table_index, actual_col_idx,
+                            column_ref_expr.alias));
       agg_fns.emplace_back(std::make_pair(std::move(simplest_attr),
                                           ConvertAggFnType(agg_fn_type)));
     }
@@ -300,7 +307,8 @@ DuckToIR::ConstructSimplestOrderBy(duckdb::LogicalOrder &order_op,
     simplest_attr = std::make_unique<SimplestAttr>(
         ConvertVarType(column_ref_expr.return_type),
         column_ref_expr.binding.table_index, actual_col_idx,
-        column_ref_expr.alias);
+        ResolveColumnName(column_ref_expr.binding.table_index, actual_col_idx,
+                          column_ref_expr.alias));
     order_struct.attr = std::move(simplest_attr);
     orders.emplace_back(std::move(order_struct));
   }
@@ -431,8 +439,10 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
     auto left_actual_col_idx =
         ResolveDuckDBColumnIndex(column_ref_left_cond.binding.table_index,
                                  column_ref_left_cond.binding.column_index);
-    // Get the correct column name from the base table schema
-    std::string left_actual_col_name = column_ref_left_cond.alias;
+    // Get the correct column name (use chunk_col_names_ for temp tables)
+    std::string left_actual_col_name =
+        ResolveColumnName(column_ref_left_cond.binding.table_index,
+                          left_actual_col_idx, column_ref_left_cond.alias);
     auto left_simplest_cond = std::make_unique<SimplestAttr>(
         left_type, column_ref_left_cond.binding.table_index,
         left_actual_col_idx, left_actual_col_name);
@@ -447,8 +457,10 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
     auto right_actual_col_idx =
         ResolveDuckDBColumnIndex(column_ref_right_cond.binding.table_index,
                                  column_ref_right_cond.binding.column_index);
-    // Get the correct column name from the base table schema
-    std::string right_actual_col_name = column_ref_right_cond.alias;
+    // Get the correct column name (use chunk_col_names_ for temp tables)
+    std::string right_actual_col_name =
+        ResolveColumnName(column_ref_right_cond.binding.table_index,
+                          right_actual_col_idx, column_ref_right_cond.alias);
     auto right_simplest_cond = std::make_unique<SimplestAttr>(
         right_type, column_ref_right_cond.binding.table_index,
         right_actual_col_idx, right_actual_col_name);
@@ -777,8 +789,10 @@ DuckToIR::ConvertAttr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
       ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
                                column_ref_expr.binding.column_index);
 
-  // Get the correct column name from the base table schema
-  std::string actual_column_name = column_ref_expr.alias;
+  // Get the correct column name (use chunk_col_names_ for temp tables)
+  std::string actual_column_name =
+      ResolveColumnName(column_ref_expr.binding.table_index, actual_column_idx,
+                        column_ref_expr.alias);
 
   auto simplest_attr = std::make_unique<SimplestAttr>(
       ConvertVarType(column_ref_expr.return_type),
@@ -1074,8 +1088,10 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
     auto actual_column_idx =
         ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
                                  column_ref_expr.binding.column_index);
-    // Get the correct column name from the base table schema
-    std::string actual_column_name = column_ref_expr.alias;
+    // Get the correct column name (use chunk_col_names_ for temp tables)
+    std::string actual_column_name =
+        ResolveColumnName(column_ref_expr.binding.table_index,
+                          actual_column_idx, column_ref_expr.alias);
     auto simplest_attr = std::make_unique<SimplestAttr>(
         ConvertVarType(column_ref_expr.return_type),
         column_ref_expr.binding.table_index, actual_column_idx,

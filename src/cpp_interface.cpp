@@ -111,10 +111,13 @@ std::unique_ptr<SimplestStmt> ConvertDuckDBPlanToIR(
     duckdb::Binder &binder, duckdb::ClientContext &context,
     duckdb::LogicalOperator *duckdb_plan_pointer,
     const std::unordered_map<unsigned int, std::string> &intermediate_table_map,
-    bool embed_intermediate_data) {
+    bool embed_intermediate_data,
+    const std::unordered_map<unsigned int, std::vector<std::string>>
+        *chunk_col_names) {
   ir_sql_converter::DuckToIR converter(binder, context);
   auto ir = converter.ConstructSimplestStmt(
-      duckdb_plan_pointer, intermediate_table_map, embed_intermediate_data);
+      duckdb_plan_pointer, intermediate_table_map, embed_intermediate_data,
+      chunk_col_names);
   return std::move(ir);
 }
 
