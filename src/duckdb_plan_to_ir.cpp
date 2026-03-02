@@ -99,14 +99,18 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
       if (find_intermediate_table != intermediate_table_map.end()) {
         // Intermediate result from previous subplan
         if (embed_intermediate_data) {
+#ifndef NDEBUG
           std::cout << "cross engine\n";
+#endif
           // Cross-engine: embed actual data in SimplestChunk
           auto simplest_chunk = ConstructSimplestChunk(column_data_get_op,
                                                        intermediate_table_map);
           result = unique_ptr_cast<SimplestChunk, SimplestStmt>(
               std::move(simplest_chunk));
         } else {
+#ifndef NDEBUG
           std::cout << "same engine\n";
+#endif
           // Same-engine: create SimplestChunk with empty contents
           // The engine will provide the data at execution time
           auto simplest_chunk = ConstructSimplestChunkPlaceholder(
@@ -115,7 +119,9 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
               std::move(simplest_chunk));
         }
       } else {
+#ifndef NDEBUG
         std::cout << "embed data\n";
+#endif
         // IN-clause constant list - always embed data
         auto simplest_chunk =
             ConstructSimplestChunk(column_data_get_op, intermediate_table_map);
