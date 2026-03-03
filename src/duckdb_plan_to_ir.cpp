@@ -619,7 +619,6 @@ std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunk(
         ConvertVarType(types[i]), table_index, i, "col" + std::to_string(i));
     target_list.emplace_back(std::move(simplest_attr));
   }
-  std::cout << "target_list.size()=" << target_list.size() << "\n";
 
   // todo: add qual vec
   std::vector<std::unique_ptr<SimplestExpr>> qual_vec;
