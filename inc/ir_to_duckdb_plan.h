@@ -54,7 +54,7 @@ public:
   ~IRToDuck() = default;
 
   duckdb::unique_ptr<duckdb::LogicalOperator>
-  ConstructDuckdbPlan(const std::unique_ptr<SimplestStmt> &simplest_ir);
+  ConstructDuckdbPlan(const std::unique_ptr<AQPStmt> &simplest_ir);
 
 private:
   duckdb::unique_ptr<duckdb::LogicalComparisonJoin>
@@ -90,7 +90,7 @@ private:
 
   // Expression construction
   duckdb::unique_ptr<duckdb::Expression>
-  ConstructDuckdbExpression(const std::unique_ptr<SimplestExpr> &simplest_expr);
+  ConstructDuckdbExpression(const std::unique_ptr<AQPExpr> &simplest_expr);
 
   duckdb::unique_ptr<duckdb::BoundColumnRefExpression>
   ConstructDuckdbColumnRef(const std::unique_ptr<SimplestAttr> &simplest_attr);

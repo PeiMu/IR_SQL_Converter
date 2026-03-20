@@ -10,7 +10,7 @@ using json = nlohmann::json;
 using namespace ir_sql_converter;
 
 struct IRConverterStmtListInternal {
-  std::vector<std::unique_ptr<SimplestStmt>> stmts;
+  std::vector<std::unique_ptr<AQPStmt>> stmts;
   // todo
   std::string last_error;
   // todo
@@ -18,7 +18,7 @@ struct IRConverterStmtListInternal {
 };
 
 struct IRConverterStmtInternal {
-  std::unique_ptr<SimplestStmt> stmt;
+  std::unique_ptr<AQPStmt> stmt;
   // todo
   std::string last_error;
   // todo
@@ -178,7 +178,7 @@ char *ConvertIRToSQL_C(IRConverterStmt stmt, int query_id, int save_file,
   }
 
   try {
-    auto *simplest_stmt = static_cast<SimplestStmt *>(stmt);
+    auto *simplest_stmt = static_cast<AQPStmt *>(stmt);
     simplest_stmt->Print(true);
     std::string sql_path_str = sql_path ? std::string(sql_path) : "./";
     std::string sql =

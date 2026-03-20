@@ -44,7 +44,7 @@ public:
   ~ParseTreeToIR() = default;
 
   // Main conversion function
-  std::unique_ptr<SimplestStmt> Convert(const json &parse_tree,
+  std::unique_ptr<AQPStmt> Convert(const json &parse_tree,
                                         unsigned int sub_plan_id);
 
   void Clear() {
@@ -57,20 +57,20 @@ public:
 
 private:
   // Parse tree processing
-  std::unique_ptr<SimplestStmt> ConvertSelectStmt(const json &select_node,
+  std::unique_ptr<AQPStmt> ConvertSelectStmt(const json &select_node,
                                                   unsigned int sub_plan_id);
 
   // FROM clause processing
-  std::unique_ptr<SimplestStmt> ConvertFromClause(const json &from_list);
-  std::unique_ptr<SimplestStmt> ConvertJoinExpr(const json &join_node);
-  std::unique_ptr<SimplestStmt> ConvertRangeVar(const json &range_var);
+  std::unique_ptr<AQPStmt> ConvertFromClause(const json &from_list);
+  std::unique_ptr<AQPStmt> ConvertJoinExpr(const json &join_node);
+  std::unique_ptr<AQPStmt> ConvertRangeVar(const json &range_var);
 
   // WHERE clause processing
-  std::vector<std::unique_ptr<SimplestExpr>>
+  std::vector<std::unique_ptr<AQPExpr>>
   ConvertWhereClause(const json &where_node);
-  std::unique_ptr<SimplestExpr> ConvertAExpr(const json &expr_node);
-  std::unique_ptr<SimplestExpr> ConvertBoolExpr(const json &bool_expr);
-  std::unique_ptr<SimplestExpr> ConvertNullTest(const json &null_test);
+  std::unique_ptr<AQPExpr> ConvertAExpr(const json &expr_node);
+  std::unique_ptr<AQPExpr> ConvertBoolExpr(const json &bool_expr);
+  std::unique_ptr<AQPExpr> ConvertNullTest(const json &null_test);
 
   // Target list processing
   std::vector<std::unique_ptr<SimplestAttr>>
@@ -97,9 +97,9 @@ private:
 
   // Helper to extract join conditions from expression trees
   void ExtractJoinAndFilterConditions(
-      std::unique_ptr<SimplestExpr> expr,
+      std::unique_ptr<AQPExpr> expr,
       std::vector<std::unique_ptr<SimplestVarComparison>> &join_conditions,
-      std::vector<std::unique_ptr<SimplestExpr>> &filter_conditions);
+      std::vector<std::unique_ptr<AQPExpr>> &filter_conditions);
 
   // State
   std::unordered_map<std::string, unsigned int> table_index_map;

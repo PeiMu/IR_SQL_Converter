@@ -49,7 +49,7 @@ public:
       : binder(binder), context(context) {};
   ~DuckToIR() = default;
 
-  std::unique_ptr<SimplestStmt> ConstructSimplestStmt(
+  std::unique_ptr<AQPStmt> ConstructSimplestStmt(
       duckdb::LogicalOperator *duckdb_plan_pointer,
       const std::unordered_map<unsigned int, std::string>
           &intermediate_table_map,
@@ -60,14 +60,14 @@ public:
 private:
   std::unique_ptr<SimplestProjection>
   ConstructSimplestProj(duckdb::LogicalProjection &proj_op,
-                        std::unique_ptr<SimplestStmt> child);
+                        std::unique_ptr<AQPStmt> child);
   std::unique_ptr<SimplestJoin>
   ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
-                        std::unique_ptr<SimplestStmt> left_child,
-                        std::unique_ptr<SimplestStmt> right_child);
+                        std::unique_ptr<AQPStmt> left_child,
+                        std::unique_ptr<AQPStmt> right_child);
   std::unique_ptr<SimplestFilter>
   ConstructSimplestFilter(duckdb::LogicalFilter &filter_op,
-                          std::unique_ptr<SimplestStmt> child);
+                          std::unique_ptr<AQPStmt> child);
   std::unique_ptr<SimplestScan>
   ConstructSimplestScan(duckdb::LogicalGet &get_op);
   std::unique_ptr<SimplestScan>
@@ -85,17 +85,17 @@ private:
           &intermediate_table_map);
   std::unique_ptr<SimplestCrossProduct>
   ConstructSimplestCrossProduct(duckdb::LogicalCrossProduct &cross_product_op,
-                                std::unique_ptr<SimplestStmt> left_child,
-                                std::unique_ptr<SimplestStmt> right_child);
+                                std::unique_ptr<AQPStmt> left_child,
+                                std::unique_ptr<AQPStmt> right_child);
   std::unique_ptr<SimplestAggregate>
   ConstructSimplestAggGroup(duckdb::LogicalAggregate &agg_group_op,
-                            std::unique_ptr<SimplestStmt> child);
+                            std::unique_ptr<AQPStmt> child);
   std::unique_ptr<SimplestOrderBy>
   ConstructSimplestOrderBy(duckdb::LogicalOrder &order_op,
-                           std::unique_ptr<SimplestStmt> child);
+                           std::unique_ptr<AQPStmt> child);
   std::unique_ptr<SimplestLimit>
   ConstructSimplestLimit(duckdb::LogicalLimit &limit_op,
-                         std::unique_ptr<SimplestStmt> child);
+                         std::unique_ptr<AQPStmt> child);
 
   SimplestExprType ConvertCompType(duckdb::ExpressionType type);
   SimplestVarType ConvertVarType(const duckdb::LogicalType &type);
@@ -112,12 +112,12 @@ private:
   std::unique_ptr<SimplestConstVar>
   ConvertConstVar(const duckdb::Value &value, const std::string &prefix = "",
                   const std::string &appendix = "");
-  std::unique_ptr<SimplestExpr>
+  std::unique_ptr<AQPExpr>
   ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr);
 
-  std::vector<std::unique_ptr<SimplestExpr>> CollectQualVecExprs(
+  std::vector<std::unique_ptr<AQPExpr>> CollectQualVecExprs(
       const duckdb::vector<duckdb::unique_ptr<duckdb::Expression>> &exprs);
-  std::unique_ptr<SimplestExpr>
+  std::unique_ptr<AQPExpr>
   CollectScanFilter(const std::unique_ptr<duckdb::TableFilter> &filter_cond,
                     std::unique_ptr<SimplestAttr> var_attr);
 

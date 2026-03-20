@@ -92,11 +92,11 @@ enum SimplestNodeType {
   SortNode
 };
 
-class SimplestNode {
+class AQPNode {
 public:
-  explicit SimplestNode(SimplestNodeType node_type) : node_type(node_type) {};
+  explicit AQPNode(SimplestNodeType node_type) : node_type(node_type) {};
 
-  virtual ~SimplestNode() = default;
+  virtual ~AQPNode() = default;
 
   template <class TARGET> TARGET &Cast() {
     return reinterpret_cast<TARGET &>(*this);
@@ -116,13 +116,13 @@ private:
   SimplestNodeType node_type;
 };
 
-class SimplestLiteral : public SimplestNode {
+class SimplestLiteral : public AQPNode {
 public:
   explicit SimplestLiteral(std::string literal_value)
-      : SimplestNode(LiteralNode), literal_value(std::move(literal_value)) {};
+      : AQPNode(LiteralNode), literal_value(std::move(literal_value)) {};
 
   SimplestLiteral(const SimplestLiteral &other)
-      : SimplestNode(other.GetNodeType()),
+      : AQPNode(other.GetNodeType()),
         literal_value(other.literal_value) {};
 
   ~SimplestLiteral() override = default;
@@ -144,13 +144,13 @@ using table_str =
     std::unordered_map<std::string,
                        std::vector<std::unique_ptr<SimplestLiteral>>>;
 
-class SimplestVar : public SimplestNode {
+class SimplestVar : public AQPNode {
 public:
   SimplestVar(SimplestVarType type, bool is_const, SimplestNodeType node_type)
-      : SimplestNode(node_type), type(type), is_const(is_const) {};
+      : AQPNode(node_type), type(type), is_const(is_const) {};
 
   SimplestVar(const SimplestVar &other)
-      : SimplestNode(other.GetNodeType()), type(other.type),
+      : AQPNode(other.GetNodeType()), type(other.type),
         is_const(other.is_const) {};
 
   ~SimplestVar() override = default;
@@ -393,15 +393,15 @@ private:
   unsigned int param_id;
 };
 
-class SimplestExpr : public SimplestNode {
+class AQPExpr : public AQPNode {
 public:
-  SimplestExpr(SimplestExprType expr_type, SimplestNodeType node_type)
-      : SimplestNode(node_type), expr_type(expr_type) {};
+  AQPExpr(SimplestExprType expr_type, SimplestNodeType node_type)
+      : AQPNode(node_type), expr_type(expr_type) {};
 
-  SimplestExpr(const SimplestExpr &other)
-      : SimplestExpr(other.expr_type, other.GetNodeType()) {};
+  AQPExpr(const AQPExpr &other)
+      : AQPExpr(other.expr_type, other.GetNodeType()) {};
 
-  ~SimplestExpr() override = default;
+  ~AQPExpr() override = default;
 
   SimplestExprType GetSimplestExprType() const { return expr_type; }
 
@@ -411,12 +411,12 @@ private:
   SimplestExprType expr_type;
 };
 
-class SimplestVarComparison : public SimplestExpr {
+class SimplestVarComparison : public AQPExpr {
 public:
   SimplestVarComparison(SimplestExprType comparison_type,
                         std::unique_ptr<SimplestAttr> left_attr,
                         std::unique_ptr<SimplestAttr> right_attr)
-      : SimplestExpr(comparison_type, VarComparisonNode),
+      : AQPExpr(comparison_type, VarComparisonNode),
         left_attr(std::move(left_attr)), right_attr(std::move(right_attr)) {};
   SimplestVarComparison(const SimplestVarComparison &) =
       delete; // no copy constructor
@@ -481,12 +481,12 @@ public:
   std::unique_ptr<SimplestAttr> right_attr;
 };
 
-class SimplestVarParamComparison : public SimplestExpr {
+class SimplestVarParamComparison : public AQPExpr {
 public:
   SimplestVarParamComparison(SimplestExprType comparison_type,
                              std::unique_ptr<SimplestAttr> attr,
                              std::unique_ptr<SimplestParam> param_var)
-      : SimplestExpr(comparison_type, VarParamComparisonNode),
+      : AQPExpr(comparison_type, VarParamComparisonNode),
         attr(std::move(attr)), param_var(std::move(param_var)) {};
 
   SimplestVarParamComparison(const SimplestVarParamComparison &) =
@@ -554,12 +554,12 @@ public:
   std::unique_ptr<SimplestParam> param_var;
 };
 
-class SimplestVarConstComparison : public SimplestExpr {
+class SimplestVarConstComparison : public AQPExpr {
 public:
   SimplestVarConstComparison(SimplestExprType comparison_type,
                              std::unique_ptr<SimplestAttr> attr,
                              std::unique_ptr<SimplestConstVar> const_var)
-      : SimplestExpr(comparison_type, VarConstComparisonNode),
+      : AQPExpr(comparison_type, VarConstComparisonNode),
         attr(std::move(attr)), const_var(std::move(const_var)) {};
 
   SimplestVarConstComparison(const SimplestVarConstComparison &) =
@@ -627,11 +627,11 @@ public:
   std::unique_ptr<SimplestConstVar> const_var;
 };
 
-class SimplestIsNullExpr : public SimplestExpr {
+class SimplestIsNullExpr : public AQPExpr {
 public:
   SimplestIsNullExpr(SimplestExprType is_null_type,
                      std::unique_ptr<SimplestAttr> attr)
-      : SimplestExpr(is_null_type, IsNullExprNode), attr(std::move(attr)) {};
+      : AQPExpr(is_null_type, IsNullExprNode), attr(std::move(attr)) {};
 
   SimplestIsNullExpr(const SimplestIsNullExpr &) =
       delete; // no copy constructor
@@ -683,13 +683,13 @@ public:
 };
 
 // if it's a logical not, let `left_expr` be nullptr
-class SimplestLogicalExpr : public SimplestExpr {
+class SimplestLogicalExpr : public AQPExpr {
 public:
   // todo: here might be more than two children?
   SimplestLogicalExpr(SimplestLogicalOp logical_op,
-                      std::unique_ptr<SimplestExpr> left_expr,
-                      std::unique_ptr<SimplestExpr> right_expr)
-      : SimplestExpr(LogicalOp, LogicalExprNode),
+                      std::unique_ptr<AQPExpr> left_expr,
+                      std::unique_ptr<AQPExpr> right_expr)
+      : AQPExpr(LogicalOp, LogicalExprNode),
         left_expr(std::move(left_expr)), right_expr(std::move(right_expr)),
         logical_op(logical_op) {};
 
@@ -736,18 +736,18 @@ public:
     return str;
   }
 
-  std::unique_ptr<SimplestExpr> left_expr;
-  std::unique_ptr<SimplestExpr> right_expr;
+  std::unique_ptr<AQPExpr> left_expr;
+  std::unique_ptr<AQPExpr> right_expr;
 
 private:
   SimplestLogicalOp logical_op;
 };
 
 // it can be a single attr, e.g. the `In` clause of the Filter node
-class SimplestSingleAttrExpr : public SimplestExpr {
+class SimplestSingleAttrExpr : public AQPExpr {
 public:
   explicit SimplestSingleAttrExpr(std::unique_ptr<SimplestAttr> attr)
-      : SimplestExpr(SimplestExprType::SingleAttr, SingleAttrExprNode),
+      : AQPExpr(SimplestExprType::SingleAttr, SingleAttrExprNode),
         attr(std::move(attr)) {};
 
   SimplestSingleAttrExpr(const SimplestSingleAttrExpr &) =
@@ -774,46 +774,46 @@ public:
   std::unique_ptr<SimplestAttr> attr;
 };
 
-class SimplestStmt : public SimplestNode {
+class AQPStmt : public AQPNode {
 public:
-  SimplestStmt(std::vector<std::unique_ptr<SimplestStmt>> children,
+  AQPStmt(std::vector<std::unique_ptr<AQPStmt>> children,
                std::vector<std::unique_ptr<SimplestAttr>> target_list,
-               std::vector<std::unique_ptr<SimplestExpr>> qual_vec,
+               std::vector<std::unique_ptr<AQPExpr>> qual_vec,
                SimplestNodeType node_type)
-      : SimplestNode(node_type), target_list(std::move(target_list)),
+      : AQPNode(node_type), target_list(std::move(target_list)),
         children(std::move(children)), qual_vec(std::move(qual_vec)) {};
 
-  SimplestStmt(std::vector<std::unique_ptr<SimplestAttr>> target_list,
-               std::vector<std::unique_ptr<SimplestExpr>> qual_vec,
+  AQPStmt(std::vector<std::unique_ptr<SimplestAttr>> target_list,
+               std::vector<std::unique_ptr<AQPExpr>> qual_vec,
                SimplestNodeType node_type)
-      : SimplestNode(node_type), target_list(std::move(target_list)),
+      : AQPNode(node_type), target_list(std::move(target_list)),
         qual_vec(std::move(qual_vec)) {};
 
-  SimplestStmt(std::vector<std::unique_ptr<SimplestStmt>> children,
+  AQPStmt(std::vector<std::unique_ptr<AQPStmt>> children,
                std::vector<std::unique_ptr<SimplestAttr>> target_list,
                SimplestNodeType node_type)
-      : SimplestNode(node_type), children(std::move(children)),
+      : AQPNode(node_type), children(std::move(children)),
         target_list(std::move(target_list)) {};
 
-  SimplestStmt(std::vector<std::unique_ptr<SimplestStmt>> children,
+  AQPStmt(std::vector<std::unique_ptr<AQPStmt>> children,
                SimplestNodeType node_type)
-      : SimplestNode(node_type), children(std::move(children)) {};
+      : AQPNode(node_type), children(std::move(children)) {};
 
-  SimplestStmt(std::unique_ptr<SimplestStmt> stmt, SimplestNodeType node_type)
-      : SimplestNode(node_type), target_list(std::move(stmt->target_list)),
+  AQPStmt(std::unique_ptr<AQPStmt> stmt, SimplestNodeType node_type)
+      : AQPNode(node_type), target_list(std::move(stmt->target_list)),
         children(std::move(stmt->children)),
         qual_vec(std::move(stmt->qual_vec)),
         estimated_cardinality(stmt->estimated_cardinality) {};
 
-  SimplestStmt(const SimplestStmt &) = delete;            // no copy constructor
-  SimplestStmt &operator=(const SimplestStmt &) = delete; // no copy assignment
+  AQPStmt(const AQPStmt &) = delete;            // no copy constructor
+  AQPStmt &operator=(const AQPStmt &) = delete; // no copy assignment
 
-  SimplestStmt(SimplestStmt &&) = default;
-  SimplestStmt &operator=(SimplestStmt &&) = default;
+  AQPStmt(AQPStmt &&) = default;
+  AQPStmt &operator=(AQPStmt &&) = default;
 
-  ~SimplestStmt() override = default;
+  ~AQPStmt() override = default;
 
-  void SimplestAddChild(std::unique_ptr<SimplestStmt> child) {
+  void SimplestAddChild(std::unique_ptr<AQPStmt> child) {
     children.emplace_back(std::move(child));
   }
 
@@ -845,21 +845,21 @@ public:
   std::vector<std::unique_ptr<SimplestAttr>> target_list;
 
   // children[0] is the left node, children[1] is the right node
-  std::vector<std::unique_ptr<SimplestStmt>> children;
+  std::vector<std::unique_ptr<AQPStmt>> children;
 
   // implicitly condition - from postgres
   // todo: need to check if only var-const comparison exists
-  std::vector<std::unique_ptr<SimplestExpr>> qual_vec;
+  std::vector<std::unique_ptr<AQPExpr>> qual_vec;
 
 protected:
   uint64_t estimated_cardinality = 0;
 };
 
-class SimplestProjection : public SimplestStmt {
+class SimplestProjection : public AQPStmt {
 public:
-  SimplestProjection(std::unique_ptr<SimplestStmt> base_stmt,
+  SimplestProjection(std::unique_ptr<AQPStmt> base_stmt,
                      unsigned int table_index)
-      : SimplestStmt(std::move(base_stmt), ProjectionNode),
+      : AQPStmt(std::move(base_stmt), ProjectionNode),
         table_index(table_index) {};
 
   ~SimplestProjection() override = default;
@@ -879,7 +879,7 @@ public:
       }
       str += "]";
     }
-    str += SimplestStmt::Print(false, depth);
+    str += AQPStmt::Print(false, depth);
 
     if (print)
       std::cout << str << std::endl;
@@ -894,25 +894,25 @@ private:
 using agg_fn_pair =
     std::vector<std::pair<std::unique_ptr<SimplestAttr>, SimplestAggFnType>>;
 
-class SimplestAggregate : public SimplestStmt {
+class SimplestAggregate : public AQPStmt {
 public:
-  SimplestAggregate(std::unique_ptr<SimplestStmt> base_stmt,
+  SimplestAggregate(std::unique_ptr<AQPStmt> base_stmt,
                     agg_fn_pair agg_fns)
-      : SimplestStmt(std::move(base_stmt), AggregateNode),
+      : AQPStmt(std::move(base_stmt), AggregateNode),
         agg_fns(std::move(agg_fns)) {};
 
-  SimplestAggregate(std::unique_ptr<SimplestStmt> base_stmt,
+  SimplestAggregate(std::unique_ptr<AQPStmt> base_stmt,
                     agg_fn_pair agg_fns, unsigned int agg_index,
                     unsigned int group_index)
-      : SimplestStmt(std::move(base_stmt), AggregateNode),
+      : AQPStmt(std::move(base_stmt), AggregateNode),
         agg_fns(std::move(agg_fns)), agg_index(agg_index),
         group_index(group_index) {};
 
-  SimplestAggregate(std::unique_ptr<SimplestStmt> base_stmt,
+  SimplestAggregate(std::unique_ptr<AQPStmt> base_stmt,
                     agg_fn_pair agg_fns,
                     std::vector<std::unique_ptr<SimplestAttr>> groups,
                     unsigned int agg_index, unsigned int group_index)
-      : SimplestStmt(std::move(base_stmt), AggregateNode),
+      : AQPStmt(std::move(base_stmt), AggregateNode),
         agg_fns(std::move(agg_fns)), groups(std::move(groups)),
         agg_index(agg_index), group_index(group_index) {};
 
@@ -968,7 +968,7 @@ public:
       str += "]";
     }
 
-    str += SimplestStmt::Print(false, depth);
+    str += AQPStmt::Print(false, depth);
 
     if (print)
       std::cout << str << std::endl;
@@ -994,11 +994,11 @@ struct OrderStruct {
   std::unique_ptr<SimplestAttr> attr;
 };
 
-class SimplestOrderBy : public SimplestStmt {
+class SimplestOrderBy : public AQPStmt {
 public:
-  SimplestOrderBy(std::unique_ptr<SimplestStmt> base_stmt,
+  SimplestOrderBy(std::unique_ptr<AQPStmt> base_stmt,
                   std::vector<OrderStruct> orders)
-      : SimplestStmt(std::move(base_stmt), OrderNode),
+      : AQPStmt(std::move(base_stmt), OrderNode),
         orders(std::move(orders)) {};
 
   ~SimplestOrderBy() override = default;
@@ -1027,7 +1027,7 @@ public:
     str += "Order By:\n";
     str += order_str;
 
-    str += SimplestStmt::Print(false, depth);
+    str += AQPStmt::Print(false, depth);
 
     if (print)
       std::cout << str << std::endl;
@@ -1044,11 +1044,11 @@ struct LimitVal {
   idx_t val;
 };
 
-class SimplestLimit : public SimplestStmt {
+class SimplestLimit : public AQPStmt {
 public:
-  SimplestLimit(std::unique_ptr<SimplestStmt> base_stmt, LimitVal limit_val,
+  SimplestLimit(std::unique_ptr<AQPStmt> base_stmt, LimitVal limit_val,
                 LimitVal offset_val)
-      : SimplestStmt(std::move(base_stmt), LimitNode), limit_val(limit_val),
+      : AQPStmt(std::move(base_stmt), LimitNode), limit_val(limit_val),
         offset_val(offset_val) {};
 
   ~SimplestLimit() override = default;
@@ -1087,7 +1087,7 @@ public:
     str += "Limit:\n";
     str += limit_str;
 
-    str += SimplestStmt::Print(false, depth);
+    str += AQPStmt::Print(false, depth);
 
     if (print)
       std::cout << str << std::endl;
@@ -1099,18 +1099,18 @@ public:
   LimitVal offset_val;
 };
 
-class SimplestJoin : public SimplestStmt {
+class SimplestJoin : public AQPStmt {
 public:
   SimplestJoin(
-      std::unique_ptr<SimplestStmt> base_stmt,
+      std::unique_ptr<AQPStmt> base_stmt,
       std::vector<std::unique_ptr<SimplestVarComparison>> join_conditions,
       SimplestJoinType join_type)
-      : SimplestStmt(std::move(base_stmt), JoinNode),
+      : AQPStmt(std::move(base_stmt), JoinNode),
         join_conditions(std::move(join_conditions)), join_type(join_type) {};
 
-  SimplestJoin(std::unique_ptr<SimplestStmt> base_stmt,
+  SimplestJoin(std::unique_ptr<AQPStmt> base_stmt,
                SimplestJoinType join_type)
-      : SimplestStmt(std::move(base_stmt), JoinNode), join_type(join_type) {};
+      : AQPStmt(std::move(base_stmt), JoinNode), join_type(join_type) {};
 
   SimplestJoin(const SimplestJoin &) = delete;            // no copy constructor
   SimplestJoin &operator=(const SimplestJoin &) = delete; // no copy assignment
@@ -1184,7 +1184,7 @@ public:
       str += "]";
     }
 
-    str += SimplestStmt::Print(false, depth);
+    str += AQPStmt::Print(false, depth);
 
     if (print)
       std::cout << str << std::endl;
@@ -1199,17 +1199,17 @@ private:
   unsigned int mark_index{};
 };
 
-class SimplestCrossProduct : public SimplestStmt {
+class SimplestCrossProduct : public AQPStmt {
 public:
-  explicit SimplestCrossProduct(std::unique_ptr<SimplestStmt> base_stmt)
-      : SimplestStmt(std::move(base_stmt), CrossProductNode) {};
+  explicit SimplestCrossProduct(std::unique_ptr<AQPStmt> base_stmt)
+      : AQPStmt(std::move(base_stmt), CrossProductNode) {};
 
   ~SimplestCrossProduct() override = default;
 
   std::string Print(bool print = true, int depth = 0) override {
     std::string str = "CrossProduct";
 
-    str += SimplestStmt::Print(false, depth);
+    str += AQPStmt::Print(false, depth);
 
     if (print)
       std::cout << str << std::endl;
@@ -1218,14 +1218,14 @@ public:
   }
 };
 
-class SimplestFilter : public SimplestStmt {
+class SimplestFilter : public AQPStmt {
 public:
-  explicit SimplestFilter(std::unique_ptr<SimplestStmt> base_stmt)
-      : SimplestStmt(std::move(base_stmt), FilterNode) {};
+  explicit SimplestFilter(std::unique_ptr<AQPStmt> base_stmt)
+      : AQPStmt(std::move(base_stmt), FilterNode) {};
 
-  //	SimplestFilter(std::unique_ptr<SimplestStmt> base_stmt,
-  // std::vector<std::unique_ptr<SimplestExpr>> filter_conditions) 	    :
-  // SimplestStmt(std::move(base_stmt), FilterNode),
+  //	SimplestFilter(std::unique_ptr<AQPStmt> base_stmt,
+  // std::vector<std::unique_ptr<AQPExpr>> filter_conditions) 	    :
+  // AQPStmt(std::move(base_stmt), FilterNode),
   // filter_conditions(std::move(filter_conditions)) {};
 
   //		SimplestFilter(const SimplestFilter&) = delete; // no copy
@@ -1239,7 +1239,7 @@ public:
 
   std::string Print(bool print = true, int depth = 0) override {
     std::string str = "Filter";
-    str += SimplestStmt::Print(false, depth);
+    str += AQPStmt::Print(false, depth);
 
     if (print)
       std::cout << str << std::endl;
@@ -1248,14 +1248,14 @@ public:
   }
 
   // fixme: is this the same as `qual_vec`?
-  //	std::vector<std::unique_ptr<SimplestExpr>> filter_conditions;
+  //	std::vector<std::unique_ptr<AQPExpr>> filter_conditions;
 };
 
-class SimplestScan : public SimplestStmt {
+class SimplestScan : public AQPStmt {
 public:
-  SimplestScan(std::unique_ptr<SimplestStmt> base_stmt,
+  SimplestScan(std::unique_ptr<AQPStmt> base_stmt,
                unsigned int table_index, std::string table_name)
-      : SimplestStmt(std::move(base_stmt), ScanNode), table_index(table_index),
+      : AQPStmt(std::move(base_stmt), ScanNode), table_index(table_index),
         table_name(table_name) {};
 
   ~SimplestScan() override = default;
@@ -1283,16 +1283,16 @@ private:
 
 /*!
  * E.g. The `In` claude from JOB 6d.sql*/
-class SimplestChunk : public SimplestStmt {
+class SimplestChunk : public AQPStmt {
 public:
-  SimplestChunk(std::unique_ptr<SimplestStmt> base_stmt,
+  SimplestChunk(std::unique_ptr<AQPStmt> base_stmt,
                 unsigned int table_index, std::vector<std::string> contents)
-      : SimplestStmt(std::move(base_stmt), ChunkNode), table_index(table_index),
+      : AQPStmt(std::move(base_stmt), ChunkNode), table_index(table_index),
         contents(contents) {};
-  SimplestChunk(std::unique_ptr<SimplestStmt> base_stmt,
+  SimplestChunk(std::unique_ptr<AQPStmt> base_stmt,
                 unsigned int table_index, std::string chunk_name,
                 std::vector<std::string> contents)
-      : SimplestStmt(std::move(base_stmt), ChunkNode), table_index(table_index),
+      : AQPStmt(std::move(base_stmt), ChunkNode), table_index(table_index),
         chunk_name(chunk_name), contents(contents) {};
 
   ~SimplestChunk() override = default;
@@ -1342,11 +1342,11 @@ private:
   std::string chunk_name;
 };
 
-class SimplestHash : public SimplestStmt {
+class SimplestHash : public AQPStmt {
 public:
-  SimplestHash(std::unique_ptr<SimplestStmt> base_stmt,
+  SimplestHash(std::unique_ptr<AQPStmt> base_stmt,
                std::vector<std::unique_ptr<SimplestAttr>> hash_keys)
-      : SimplestStmt(std::move(base_stmt), HashNode),
+      : AQPStmt(std::move(base_stmt), HashNode),
         hash_keys(std::move(hash_keys)) {};
 
   SimplestHash(const SimplestHash &) = delete;            // no copy constructor
@@ -1366,7 +1366,7 @@ public:
       str += "\n" + hk->Print(false);
     }
 
-    str += SimplestStmt::Print(false, depth);
+    str += AQPStmt::Print(false, depth);
     str += "╚══════════════════╝\n";
 
     if (print)
@@ -1387,11 +1387,11 @@ struct SimplestOrderStruct {
 };
 
 //! The `order by` clause
-class SimplestSort : public SimplestStmt {
+class SimplestSort : public AQPStmt {
 public:
-  SimplestSort(std::unique_ptr<SimplestStmt> base_stmt,
+  SimplestSort(std::unique_ptr<AQPStmt> base_stmt,
                std::vector<SimplestOrderStruct> order_struct_vec)
-      : SimplestStmt(std::move(base_stmt), SortNode),
+      : AQPStmt(std::move(base_stmt), SortNode),
         order_struct_vec(order_struct_vec) {};
 
   ~SimplestSort() override = default;
@@ -1447,7 +1447,7 @@ public:
       str += "\n";
     }
 
-    str += SimplestStmt::Print(false, depth);
+    str += AQPStmt::Print(false, depth);
     str += "╚══════════════════╝\n";
 
     if (print)

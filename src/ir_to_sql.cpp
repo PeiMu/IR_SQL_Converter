@@ -1,7 +1,7 @@
 #include "ir_to_sql.h"
 
 namespace ir_sql_converter {
-std::string IRToSQLConverter::ConvertSimplestIRToSQL(SimplestStmt &plan) {
+std::string IRToSQLConverter::ConvertSimplestIRToSQL(AQPStmt &plan) {
   std::string sql_code;
 #ifdef DEBUG
   assert(nullptr != plan);
@@ -76,7 +76,7 @@ std::string IRToSQLConverter::ConvertSimplestIRToSQL(SimplestStmt &plan) {
   return sql_code;
 }
 
-void IRToSQLConverter::GenerateSQL(SimplestStmt &op) {
+void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
   std::string sql_code;
   if (!op.children.empty()) {
     GenerateSQL(*op.children[0]);
@@ -506,7 +506,7 @@ IRToSQLConverter::TranslateSimplestAggFnType(SimplestAggFnType agg_fn_type) {
 }
 
 std::string IRToSQLConverter::CollectFilter(
-    const std::unique_ptr<SimplestExpr> &qual_expr) {
+    const std::unique_ptr<AQPExpr> &qual_expr) {
   std::string ret_str;
   switch (qual_expr->GetNodeType()) {
   case SimplestNodeType::VarConstComparisonNode: {

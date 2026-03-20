@@ -41,12 +41,12 @@ public:
 
   ~NodestrToIR() = default;
 
-  std::unique_ptr<SimplestNode> StringToNode(const char *str);
+  std::unique_ptr<AQPNode> StringToNode(const char *str);
 
   std::deque<table_str> table_col_names;
 
-  std::unique_ptr<SimplestStmt>
-  GenerateProjHead(std::unique_ptr<SimplestStmt> postgres_stmt,
+  std::unique_ptr<AQPStmt>
+  GenerateProjHead(std::unique_ptr<AQPStmt> postgres_stmt,
                    size_t sub_plan_id);
 
   void Clear() {
@@ -58,20 +58,20 @@ public:
 private:
   const char *PG_strtok(int *length);
 
-  std::unique_ptr<SimplestNode>
+  std::unique_ptr<AQPNode>
   NodeRead(const char *token, int tok_len, bool return_vector = false,
-           std::vector<std::unique_ptr<SimplestNode>> *node_vec = nullptr);
+           std::vector<std::unique_ptr<AQPNode>> *node_vec = nullptr);
 
   char *DeBackslash(const char *token, int length);
 
-  std::unique_ptr<SimplestNode> StringToNodeInternal(const char *str,
+  std::unique_ptr<AQPNode> StringToNodeInternal(const char *str,
                                                      bool restore_loc_fields);
 
   int StrToInt(const char *str, char **endptr, int base);
 
   duckdb_libpgquery::PGNodeTag NodeTokenType(const char *token, int length);
 
-  std::unique_ptr<SimplestNode> ParseNodeString();
+  std::unique_ptr<AQPNode> ParseNodeString();
 
   // read postgres nodes
   void *ReadBitmapset();
@@ -82,13 +82,13 @@ private:
 
   std::vector<bool> ReadBoolCols(int numCols);
 
-  std::unique_ptr<SimplestStmt> ReadCommonPlan();
+  std::unique_ptr<AQPStmt> ReadCommonPlan();
 
   std::unique_ptr<SimplestAggregate> ReadAgg();
 
   std::unique_ptr<SimplestAttr> ReadAggref();
 
-  std::unique_ptr<SimplestNode> ReadTargetEntry();
+  std::unique_ptr<AQPNode> ReadTargetEntry();
 
   std::unique_ptr<SimplestParam> ReadParam();
 
@@ -118,7 +118,7 @@ private:
 
   std::unique_ptr<SimplestScan> ReadBitmapHeapScan();
 
-  std::unique_ptr<SimplestNode> ReadBitmapIndexScan();
+  std::unique_ptr<AQPNode> ReadBitmapIndexScan();
 
   std::unique_ptr<SimplestScan> ReadIndexScan();
 
@@ -126,17 +126,17 @@ private:
 
   std::unique_ptr<SimplestSort> ReadSort();
 
-  std::unique_ptr<SimplestExpr> ReadOpExpr();
+  std::unique_ptr<AQPExpr> ReadOpExpr();
 
   std::unique_ptr<SimplestLogicalExpr> ReadBoolExpr();
 
   std::unique_ptr<SimplestIsNullExpr> ReadNullTest();
 
-  std::unique_ptr<SimplestExpr> ReadScalarArrayOpExpr();
+  std::unique_ptr<AQPExpr> ReadScalarArrayOpExpr();
 
-  std::unique_ptr<SimplestStmt> ReadMaterial();
+  std::unique_ptr<AQPStmt> ReadMaterial();
 
-  std::unique_ptr<SimplestStmt> ReadPlannedStmt();
+  std::unique_ptr<AQPStmt> ReadPlannedStmt();
 
   void ReadRangeTblEntry();
 
@@ -162,10 +162,10 @@ private:
   std::vector<std::unique_ptr<SimplestVarParamComparison>> index_conditions;
   agg_fn_pair agg_fns;
 
-  void PopulateTableNames(SimplestStmt *stmt);
+  void PopulateTableNames(AQPStmt *stmt);
 
   void PopulateColumnName(SimplestAttr *attr);
 
-  void PopulateColumnNamesInExpr(SimplestExpr *expr);
+  void PopulateColumnNamesInExpr(AQPExpr *expr);
 };
 } // namespace ir_sql_converter

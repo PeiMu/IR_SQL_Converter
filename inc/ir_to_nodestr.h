@@ -26,8 +26,8 @@ public:
   IRToNodestr() = default;
   ~IRToNodestr() = default;
 
-  // Main entry point: convert SimplestStmt to PostgreSQL nodestring
-  std::string NodeToString(const std::unique_ptr<SimplestStmt> &stmt);
+  // Main entry point: convert AQPStmt to PostgreSQL nodestring
+  std::string NodeToString(const std::unique_ptr<AQPStmt> &stmt);
 
   // Store table/column metadata for rtable generation
   std::deque<table_str> table_col_names;
@@ -61,18 +61,18 @@ private:
   void WriteBitmapset(const char *field, const std::vector<int> &values);
 
   // Write PostgreSQL nodes
-  void WritePlannedStmt(const SimplestStmt &stmt);
-  void WriteCommonPlan(const SimplestStmt &stmt);
+  void WritePlannedStmt(const AQPStmt &stmt);
+  void WriteCommonPlan(const AQPStmt &stmt);
   void WriteTargetEntry(const SimplestAttr &attr, int resno);
   void WriteVar(const SimplestAttr &attr);
   void WriteConst(const SimplestConstVar &const_var);
   void WriteParam(const SimplestParam &param);
-  void WriteOpExpr(const SimplestExpr &expr);
+  void WriteOpExpr(const AQPExpr &expr);
   void WriteBoolExpr(const SimplestLogicalExpr &expr);
   void WriteNullTest(const SimplestIsNullExpr &expr);
 
   // Write plan nodes
-  void WritePlanNode(const SimplestStmt &stmt);
+  void WritePlanNode(const AQPStmt &stmt);
   void WriteSeqScan(const SimplestScan &scan);
   void WriteIndexScan(const SimplestScan &scan);
   void WriteHashJoin(const SimplestJoin &join);
@@ -82,7 +82,7 @@ private:
   void WriteSort(const SimplestSort &sort);
   void WriteAgg(const SimplestAggregate &agg);
   void WriteFilter(const SimplestFilter &filter);
-  void WriteMaterial(const SimplestStmt &stmt);
+  void WriteMaterial(const AQPStmt &stmt);
   void WriteProjection(const SimplestProjection &proj);
 
   // Write range table
@@ -104,7 +104,7 @@ private:
   std::string EscapeString(const std::string &str);
 
   // Collect all table indices from the plan tree
-  void CollectTableIndices(const SimplestStmt *stmt,
+  void CollectTableIndices(const AQPStmt *stmt,
                            std::vector<unsigned int> &indices);
 };
 

@@ -11,7 +11,7 @@ public:
 
   ~IRToSQLConverter() = default;
 
-  std::string ConvertSimplestIRToSQL(SimplestStmt &plan);
+  std::string ConvertSimplestIRToSQL(AQPStmt &plan);
 
   void SetTableColumnMappings(
       const std::unordered_map<std::pair<idx_t, idx_t>, std::string, pair_hash>
@@ -20,11 +20,11 @@ public:
   }
 
 private:
-  void GenerateSQL(SimplestStmt &op);
+  void GenerateSQL(AQPStmt &op);
 
   std::string TranslateSimplestAggFnType(SimplestAggFnType agg_fn_type);
 
-  std::string CollectFilter(const std::unique_ptr<SimplestExpr> &qual_expr);
+  std::string CollectFilter(const std::unique_ptr<AQPExpr> &qual_expr);
 
   std::string GetActualColumnName(idx_t table_index, idx_t column_index,
                                   const std::string &original_col_name);

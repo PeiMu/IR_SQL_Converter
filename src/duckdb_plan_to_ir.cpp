@@ -3,33 +3,33 @@
 #include <utility>
 
 namespace ir_sql_converter {
-std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
+std::unique_ptr<AQPStmt> DuckToIR::ConstructSimplestStmt(
     duckdb::LogicalOperator *duckdb_plan_pointer,
     const std::unordered_map<unsigned int, std::string> &intermediate_table_map,
     bool embed_intermediate_data,
     const std::unordered_map<unsigned int, std::vector<std::string>>
         *chunk_col_names) {
   chunk_col_names_ = chunk_col_names;
-  std::function<std::unique_ptr<SimplestStmt>(duckdb::LogicalOperator *
+  std::function<std::unique_ptr<AQPStmt>(duckdb::LogicalOperator *
                                               duckdb_plan_pointer)>
       iterate_plan;
   iterate_plan = [&iterate_plan, &intermediate_table_map,
                   embed_intermediate_data,
                   this](duckdb::LogicalOperator *duckdb_plan_pointer)
-      -> std::unique_ptr<SimplestStmt> {
-    std::unique_ptr<SimplestStmt> left_child, right_child;
+      -> std::unique_ptr<AQPStmt> {
+    std::unique_ptr<AQPStmt> left_child, right_child;
     if (!duckdb_plan_pointer->children.empty()) {
       left_child = iterate_plan(duckdb_plan_pointer->children[0].get());
       if (duckdb_plan_pointer->children.size() == 2)
         right_child = iterate_plan(duckdb_plan_pointer->children[1].get());
     }
-    std::unique_ptr<SimplestStmt> result;
+    std::unique_ptr<AQPStmt> result;
     switch (duckdb_plan_pointer->type) {
     case duckdb::LogicalOperatorType::LOGICAL_PROJECTION: {
       auto &proj_op = duckdb_plan_pointer->Cast<duckdb::LogicalProjection>();
       auto simplest_proj =
           ConstructSimplestProj(proj_op, std::move(left_child));
-      result = unique_ptr_cast<SimplestProjection, SimplestStmt>(
+      result = unique_ptr_cast<SimplestProjection, AQPStmt>(
           std::move(simplest_proj));
       break;
     }
@@ -38,7 +38,7 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
           duckdb_plan_pointer->Cast<duckdb::LogicalAggregate>();
       auto simplest_agg_group =
           ConstructSimplestAggGroup(agg_group_op, std::move(left_child));
-      result = unique_ptr_cast<SimplestAggregate, SimplestStmt>(
+      result = unique_ptr_cast<SimplestAggregate, AQPStmt>(
           std::move(simplest_agg_group));
       break;
     }
@@ -46,7 +46,7 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
       auto &order_by_op = duckdb_plan_pointer->Cast<duckdb::LogicalOrder>();
       auto simplest_order_by =
           ConstructSimplestOrderBy(order_by_op, std::move(left_child));
-      result = unique_ptr_cast<SimplestOrderBy, SimplestStmt>(
+      result = unique_ptr_cast<SimplestOrderBy, AQPStmt>(
           std::move(simplest_order_by));
       break;
     }
@@ -54,7 +54,7 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
       auto &limit_op = duckdb_plan_pointer->Cast<duckdb::LogicalLimit>();
       auto simplest_limit =
           ConstructSimplestLimit(limit_op, std::move(left_child));
-      result = unique_ptr_cast<SimplestLimit, SimplestStmt>(
+      result = unique_ptr_cast<SimplestLimit, AQPStmt>(
           std::move(simplest_limit));
       break;
     }
@@ -62,7 +62,7 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
       auto &filter_op = duckdb_plan_pointer->Cast<duckdb::LogicalFilter>();
       auto simplest_filter =
           ConstructSimplestFilter(filter_op, std::move(left_child));
-      result = unique_ptr_cast<SimplestFilter, SimplestStmt>(
+      result = unique_ptr_cast<SimplestFilter, AQPStmt>(
           std::move(simplest_filter));
       break;
     }
@@ -71,7 +71,7 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
           duckdb_plan_pointer->Cast<duckdb::LogicalCrossProduct>();
       auto simplest_cross_product = ConstructSimplestCrossProduct(
           cross_product_op, std::move(left_child), std::move(right_child));
-      result = unique_ptr_cast<SimplestCrossProduct, SimplestStmt>(
+      result = unique_ptr_cast<SimplestCrossProduct, AQPStmt>(
           std::move(simplest_cross_product));
       break;
     }
@@ -81,14 +81,14 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
       auto simplest_join = ConstructSimplestJoin(join_op, std::move(left_child),
                                                  std::move(right_child));
       result =
-          unique_ptr_cast<SimplestJoin, SimplestStmt>(std::move(simplest_join));
+          unique_ptr_cast<SimplestJoin, AQPStmt>(std::move(simplest_join));
       break;
     }
     case duckdb::LogicalOperatorType::LOGICAL_GET: {
       auto &get_op = duckdb_plan_pointer->Cast<duckdb::LogicalGet>();
       auto simplest_scan = ConstructSimplestScan(get_op);
       result =
-          unique_ptr_cast<SimplestScan, SimplestStmt>(std::move(simplest_scan));
+          unique_ptr_cast<SimplestScan, AQPStmt>(std::move(simplest_scan));
       break;
     }
     case duckdb::LogicalOperatorType::LOGICAL_CHUNK_GET: {
@@ -105,7 +105,7 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
           // Cross-engine: embed actual data in SimplestChunk
           auto simplest_chunk = ConstructSimplestChunk(column_data_get_op,
                                                        intermediate_table_map);
-          result = unique_ptr_cast<SimplestChunk, SimplestStmt>(
+          result = unique_ptr_cast<SimplestChunk, AQPStmt>(
               std::move(simplest_chunk));
         } else {
 #ifndef NDEBUG
@@ -115,7 +115,7 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
           // The engine will provide the data at execution time
           auto simplest_chunk = ConstructSimplestChunkPlaceholder(
               column_data_get_op, intermediate_table_map);
-          result = unique_ptr_cast<SimplestChunk, SimplestStmt>(
+          result = unique_ptr_cast<SimplestChunk, AQPStmt>(
               std::move(simplest_chunk));
         }
       } else {
@@ -125,7 +125,7 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
         // IN-clause constant list - always embed data
         auto simplest_chunk =
             ConstructSimplestChunk(column_data_get_op, intermediate_table_map);
-        result = unique_ptr_cast<SimplestChunk, SimplestStmt>(
+        result = unique_ptr_cast<SimplestChunk, AQPStmt>(
             std::move(simplest_chunk));
       }
       break;
@@ -163,10 +163,10 @@ std::unique_ptr<SimplestStmt> DuckToIR::ConstructSimplestStmt(
 
 std::unique_ptr<SimplestProjection>
 DuckToIR::ConstructSimplestProj(duckdb::LogicalProjection &proj_op,
-                                std::unique_ptr<SimplestStmt> child) {
+                                std::unique_ptr<AQPStmt> child) {
   auto table_index = proj_op.table_index;
 
-  std::vector<std::unique_ptr<SimplestStmt>> children;
+  std::vector<std::unique_ptr<AQPStmt>> children;
   children.emplace_back(std::move(child));
 
   std::vector<std::unique_ptr<SimplestAttr>> target_list;
@@ -189,7 +189,7 @@ DuckToIR::ConstructSimplestProj(duckdb::LogicalProjection &proj_op,
         actual_column_name);
     target_list.emplace_back(std::move(simplest_target));
   }
-  auto base_stmt = std::make_unique<SimplestStmt>(
+  auto base_stmt = std::make_unique<AQPStmt>(
       std::move(children), std::move(target_list),
       SimplestNodeType::ProjectionNode);
 
@@ -201,8 +201,8 @@ DuckToIR::ConstructSimplestProj(duckdb::LogicalProjection &proj_op,
 
 std::unique_ptr<SimplestAggregate>
 DuckToIR::ConstructSimplestAggGroup(duckdb::LogicalAggregate &agg_group_op,
-                                    std::unique_ptr<SimplestStmt> child) {
-  std::vector<std::unique_ptr<SimplestStmt>> children;
+                                    std::unique_ptr<AQPStmt> child) {
+  std::vector<std::unique_ptr<AQPStmt>> children;
   children.emplace_back(std::move(child));
 
   // todo: add target list
@@ -272,7 +272,7 @@ DuckToIR::ConstructSimplestAggGroup(duckdb::LogicalAggregate &agg_group_op,
     }
   }
 
-  auto base_stmt = std::make_unique<SimplestStmt>(
+  auto base_stmt = std::make_unique<AQPStmt>(
       std::move(children), std::move(target_list),
       SimplestNodeType::AggregateNode);
 
@@ -290,8 +290,8 @@ DuckToIR::ConstructSimplestAggGroup(duckdb::LogicalAggregate &agg_group_op,
 
 std::unique_ptr<SimplestOrderBy>
 DuckToIR::ConstructSimplestOrderBy(duckdb::LogicalOrder &order_op,
-                                   std::unique_ptr<SimplestStmt> child) {
-  std::vector<std::unique_ptr<SimplestStmt>> children;
+                                   std::unique_ptr<AQPStmt> child) {
+  std::vector<std::unique_ptr<AQPStmt>> children;
   children.emplace_back(std::move(child));
 
   // todo: add target list
@@ -318,7 +318,7 @@ DuckToIR::ConstructSimplestOrderBy(duckdb::LogicalOrder &order_op,
     order_struct.attr = std::move(simplest_attr);
     orders.emplace_back(std::move(order_struct));
   }
-  auto base_stmt = std::make_unique<SimplestStmt>(
+  auto base_stmt = std::make_unique<AQPStmt>(
       std::move(children), std::move(target_list), SimplestNodeType::OrderNode);
 
   auto simplest_order_by = std::make_unique<SimplestOrderBy>(
@@ -328,8 +328,8 @@ DuckToIR::ConstructSimplestOrderBy(duckdb::LogicalOrder &order_op,
 
 std::unique_ptr<SimplestLimit>
 DuckToIR::ConstructSimplestLimit(duckdb::LogicalLimit &limit_op,
-                                 std::unique_ptr<SimplestStmt> child) {
-  std::vector<std::unique_ptr<SimplestStmt>> children;
+                                 std::unique_ptr<AQPStmt> child) {
+  std::vector<std::unique_ptr<AQPStmt>> children;
   children.emplace_back(std::move(child));
 
   // todo: add target list
@@ -369,7 +369,7 @@ DuckToIR::ConstructSimplestLimit(duckdb::LogicalLimit &limit_op,
     D_ASSERT(false);
   }
 
-  auto base_stmt = std::make_unique<SimplestStmt>(std::move(children),
+  auto base_stmt = std::make_unique<AQPStmt>(std::move(children),
                                                   SimplestNodeType::LimitNode);
 
   auto simplest_limit = std::make_unique<SimplestLimit>(std::move(base_stmt),
@@ -379,12 +379,12 @@ DuckToIR::ConstructSimplestLimit(duckdb::LogicalLimit &limit_op,
 
 std::unique_ptr<SimplestCrossProduct> DuckToIR::ConstructSimplestCrossProduct(
     duckdb::LogicalCrossProduct &cross_product_op,
-    std::unique_ptr<SimplestStmt> left_child,
-    std::unique_ptr<SimplestStmt> right_child) {
-  std::vector<std::unique_ptr<SimplestStmt>> children;
+    std::unique_ptr<AQPStmt> left_child,
+    std::unique_ptr<AQPStmt> right_child) {
+  std::vector<std::unique_ptr<AQPStmt>> children;
   children.emplace_back(std::move(left_child));
   children.emplace_back(std::move(right_child));
-  auto base_stmt = std::make_unique<SimplestStmt>(
+  auto base_stmt = std::make_unique<AQPStmt>(
       std::move(children), SimplestNodeType::CrossProductNode);
   auto simplest_cross_product =
       std::make_unique<SimplestCrossProduct>(std::move(base_stmt));
@@ -394,8 +394,8 @@ std::unique_ptr<SimplestCrossProduct> DuckToIR::ConstructSimplestCrossProduct(
 
 std::unique_ptr<SimplestJoin>
 DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
-                                std::unique_ptr<SimplestStmt> left_child,
-                                std::unique_ptr<SimplestStmt> right_child) {
+                                std::unique_ptr<AQPStmt> left_child,
+                                std::unique_ptr<AQPStmt> right_child) {
   SimplestJoinType join_type;
   switch (join_op.join_type) {
   case duckdb::JoinType::INVALID:
@@ -425,10 +425,10 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
     D_ASSERT(false);
   }
 
-  std::vector<std::unique_ptr<SimplestStmt>> children;
+  std::vector<std::unique_ptr<AQPStmt>> children;
   children.emplace_back(std::move(left_child));
   children.emplace_back(std::move(right_child));
-  auto base_stmt = std::make_unique<SimplestStmt>(std::move(children),
+  auto base_stmt = std::make_unique<AQPStmt>(std::move(children),
                                                   SimplestNodeType::JoinNode);
 
   std::vector<std::unique_ptr<SimplestVarComparison>> join_conditions;
@@ -496,16 +496,16 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
 
 std::unique_ptr<SimplestFilter>
 DuckToIR::ConstructSimplestFilter(duckdb::LogicalFilter &filter_op,
-                                  std::unique_ptr<SimplestStmt> child) {
-  std::vector<std::unique_ptr<SimplestStmt>> children;
+                                  std::unique_ptr<AQPStmt> child) {
+  std::vector<std::unique_ptr<AQPStmt>> children;
   children.emplace_back(std::move(child));
   // todo: add target list
   std::vector<std::unique_ptr<SimplestAttr>> target_list;
   // add qual vec
-  std::vector<std::unique_ptr<SimplestExpr>> qual_vec =
+  std::vector<std::unique_ptr<AQPExpr>> qual_vec =
       CollectQualVecExprs(filter_op.expressions);
 
-  auto base_stmt = std::make_unique<SimplestStmt>(
+  auto base_stmt = std::make_unique<AQPStmt>(
       std::move(children), std::move(target_list), std::move(qual_vec),
       SimplestNodeType::FilterNode);
 
@@ -541,7 +541,7 @@ DuckToIR::ConstructSimplestScan(duckdb::LogicalGet &get_op) {
   }
 
   // add qual vec
-  std::vector<std::unique_ptr<SimplestExpr>> qual_vec;
+  std::vector<std::unique_ptr<AQPExpr>> qual_vec;
   for (const auto &filter : get_op.table_filters.filters) {
     auto actual_column_index = filter.first;
     auto &filter_cond = filter.second;
@@ -553,7 +553,7 @@ DuckToIR::ConstructSimplestScan(duckdb::LogicalGet &get_op) {
     qual_vec.emplace_back(std::move(simplest_scan_filter_expr));
   }
 
-  auto base_stmt = std::make_unique<SimplestStmt>(
+  auto base_stmt = std::make_unique<AQPStmt>(
       std::move(target_list), std::move(qual_vec), SimplestNodeType::ScanNode);
   auto table_name = compat::GetTableNameFromLogicalGet(get_op);
   auto simplest_scan = std::make_unique<SimplestScan>(std::move(base_stmt),
@@ -567,9 +567,9 @@ DuckToIR::ConstructSimplestScan(duckdb::LogicalColumnDataGet &get_op,
   // todo: add target list
   std::vector<std::unique_ptr<SimplestAttr>> target_list;
   // todo: add qual vec
-  std::vector<std::unique_ptr<SimplestExpr>> qual_vec;
+  std::vector<std::unique_ptr<AQPExpr>> qual_vec;
 
-  auto base_stmt = std::make_unique<SimplestStmt>(
+  auto base_stmt = std::make_unique<AQPStmt>(
       std::move(target_list), std::move(qual_vec), SimplestNodeType::ChunkNode);
 
   auto table_index = get_op.table_index;
@@ -621,9 +621,9 @@ std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunk(
   }
 
   // todo: add qual vec
-  std::vector<std::unique_ptr<SimplestExpr>> qual_vec;
+  std::vector<std::unique_ptr<AQPExpr>> qual_vec;
 
-  auto base_stmt = std::make_unique<SimplestStmt>(
+  auto base_stmt = std::make_unique<AQPStmt>(
       std::move(target_list), std::move(qual_vec), SimplestNodeType::ChunkNode);
   auto simplest_chunk = std::make_unique<SimplestChunk>(
       std::move(base_stmt), column_data_get_op.table_index, chunk_contents);
@@ -667,9 +667,9 @@ std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunkPlaceholder(
 
   // Empty contents - data will be provided at execution time
   std::vector<std::string> empty_contents;
-  std::vector<std::unique_ptr<SimplestExpr>> qual_vec;
+  std::vector<std::unique_ptr<AQPExpr>> qual_vec;
 
-  auto base_stmt = std::make_unique<SimplestStmt>(
+  auto base_stmt = std::make_unique<AQPStmt>(
       std::move(target_list), std::move(qual_vec), SimplestNodeType::ChunkNode);
   auto simplest_chunk = std::make_unique<SimplestChunk>(
       std::move(base_stmt), table_index, empty_contents);
@@ -848,7 +848,7 @@ DuckToIR::ConvertConstVar(const duckdb::Value &value, const std::string &prefix,
   return simplest_attr;
 }
 
-std::unique_ptr<SimplestExpr>
+std::unique_ptr<AQPExpr>
 DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
   switch (expr->type) {
   case duckdb::ExpressionType::BOUND_FUNCTION: {
@@ -881,7 +881,7 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
           std::make_unique<SimplestVarConstComparison>(
               simplest_expr_type, std::move(left_simplest_attr),
               std::move(right_simplest_attr));
-      return unique_ptr_cast<SimplestVarConstComparison, SimplestExpr>(
+      return unique_ptr_cast<SimplestVarConstComparison, AQPExpr>(
           std::move(simplest_var_const_comp));
     } else {
       duckdb::Printer::Print(
@@ -921,7 +921,7 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
       auto simplest_var_comp = std::make_unique<SimplestVarComparison>(
           ConvertCompType(expr->type), std::move(left_simplest_attr),
           std::move(right_simplest_attr));
-      return unique_ptr_cast<SimplestVarComparison, SimplestExpr>(
+      return unique_ptr_cast<SimplestVarComparison, AQPExpr>(
           std::move(simplest_var_comp));
     } else {
       if (comparison_expr.right->expression_class ==
@@ -949,7 +949,7 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
           std::make_unique<SimplestVarConstComparison>(
               ConvertCompType(expr->type), std::move(left_simplest_attr),
               std::move(right_simplest_attr));
-      return unique_ptr_cast<SimplestVarConstComparison, SimplestExpr>(
+      return unique_ptr_cast<SimplestVarConstComparison, AQPExpr>(
           std::move(simplest_var_const_comp));
     }
   }
@@ -1061,7 +1061,7 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
                        : SimplestExprType::NonNullType;
     auto simplest_is_null =
         std::make_unique<SimplestIsNullExpr>(is_null, std::move(simplest_expr));
-    return unique_ptr_cast<SimplestIsNullExpr, SimplestExpr>(
+    return unique_ptr_cast<SimplestIsNullExpr, AQPExpr>(
         std::move(simplest_is_null));
   }
   case duckdb::ExpressionType::OPERATOR_NOT: {
@@ -1072,7 +1072,7 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
     auto simplest_expr = ConvertExpr(operator_expr.children[0]);
     auto simplest_not_expr = std::make_unique<SimplestLogicalExpr>(
         SimplestLogicalOp::LogicalNot, nullptr, std::move(simplest_expr));
-    return unique_ptr_cast<SimplestLogicalExpr, SimplestExpr>(
+    return unique_ptr_cast<SimplestLogicalExpr, AQPExpr>(
         std::move(simplest_not_expr));
   }
   case duckdb::ExpressionType::OPERATOR_COALESCE: {
@@ -1103,7 +1103,7 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
         actual_column_name);
     auto simplest_attr_expr =
         std::make_unique<SimplestSingleAttrExpr>(std::move(simplest_attr));
-    return unique_ptr_cast<SimplestSingleAttrExpr, SimplestExpr>(
+    return unique_ptr_cast<SimplestSingleAttrExpr, AQPExpr>(
         std::move(simplest_attr_expr));
   }
   default:
@@ -1116,9 +1116,9 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
   return nullptr;
 }
 
-std::vector<std::unique_ptr<SimplestExpr>> DuckToIR::CollectQualVecExprs(
+std::vector<std::unique_ptr<AQPExpr>> DuckToIR::CollectQualVecExprs(
     const duckdb::vector<duckdb::unique_ptr<duckdb::Expression>> &exprs) {
-  std::vector<std::unique_ptr<SimplestExpr>> qual_vec;
+  std::vector<std::unique_ptr<AQPExpr>> qual_vec;
   for (const auto &expr : exprs) {
     auto simplest_expr = ConvertExpr(expr);
     qual_vec.emplace_back(std::move(simplest_expr));
@@ -1127,7 +1127,7 @@ std::vector<std::unique_ptr<SimplestExpr>> DuckToIR::CollectQualVecExprs(
   return qual_vec;
 }
 
-std::unique_ptr<SimplestExpr> DuckToIR::CollectScanFilter(
+std::unique_ptr<AQPExpr> DuckToIR::CollectScanFilter(
     const std::unique_ptr<duckdb::TableFilter> &filter_cond,
     std::unique_ptr<SimplestAttr> var_attr) {
   switch (filter_cond->filter_type) {
@@ -1174,20 +1174,20 @@ std::unique_ptr<SimplestExpr> DuckToIR::CollectScanFilter(
     auto simplest_constant_comp = std::make_unique<SimplestVarConstComparison>(
         simplest_comp_type, std::make_unique<SimplestAttr>(*var_attr),
         std::move(simplest_const_var));
-    return unique_ptr_cast<SimplestVarConstComparison, SimplestExpr>(
+    return unique_ptr_cast<SimplestVarConstComparison, AQPExpr>(
         std::move(simplest_constant_comp));
   }
   case duckdb::TableFilterType::IS_NOT_NULL: {
     auto simplest_is_not_null = std::make_unique<SimplestIsNullExpr>(
         SimplestExprType::NonNullType,
         std::make_unique<SimplestAttr>(*var_attr));
-    return unique_ptr_cast<SimplestIsNullExpr, SimplestExpr>(
+    return unique_ptr_cast<SimplestIsNullExpr, AQPExpr>(
         std::move(simplest_is_not_null));
   }
   case duckdb::TableFilterType::IS_NULL: {
     auto simplest_is_null = std::make_unique<SimplestIsNullExpr>(
         SimplestExprType::NullType, std::make_unique<SimplestAttr>(*var_attr));
-    return unique_ptr_cast<SimplestIsNullExpr, SimplestExpr>(
+    return unique_ptr_cast<SimplestIsNullExpr, AQPExpr>(
         std::move(simplest_is_null));
   }
   case duckdb::TableFilterType::STRUCT_EXTRACT: {

@@ -6,14 +6,14 @@
 namespace ir_sql_converter {
 
 // Forward declarations for serialization helpers
-static void SerializeStmt(std::ostream &out, const SimplestStmt *stmt);
-static void SerializeExpr(std::ostream &out, const SimplestExpr *expr);
+static void SerializeStmt(std::ostream &out, const AQPStmt *stmt);
+static void SerializeExpr(std::ostream &out, const AQPExpr *expr);
 static void SerializeAttr(std::ostream &out, const SimplestAttr *attr);
 static void SerializeConstVar(std::ostream &out,
                               const SimplestConstVar *const_var);
 
-static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in);
-static std::unique_ptr<SimplestExpr> DeserializeExpr(std::istream &in);
+static std::unique_ptr<AQPStmt> DeserializeStmt(std::istream &in);
+static std::unique_ptr<AQPExpr> DeserializeExpr(std::istream &in);
 static std::unique_ptr<SimplestAttr> DeserializeAttr(std::istream &in);
 static std::unique_ptr<SimplestConstVar> DeserializeConstVar(std::istream &in);
 
@@ -139,8 +139,8 @@ static std::unique_ptr<SimplestAttr> DeserializeAttr(std::istream &in) {
   return std::make_unique<SimplestAttr>(type, table_idx, col_idx, col_name);
 }
 
-// Serialize SimplestExpr
-static void SerializeExpr(std::ostream &out, const SimplestExpr *expr) {
+// Serialize AQPExpr
+static void SerializeExpr(std::ostream &out, const AQPExpr *expr) {
   if (!expr) {
     SimplestNodeType null_type = InvalidNodeType;
     out.write(reinterpret_cast<const char *>(&null_type), sizeof(null_type));
@@ -185,13 +185,13 @@ static void SerializeExpr(std::ostream &out, const SimplestExpr *expr) {
     break;
   }
   default:
-    throw std::runtime_error("Unknown SimplestExpr node type: " +
+    throw std::runtime_error("Unknown AQPExpr node type: " +
                              std::to_string(node_type));
   }
 }
 
-// Deserialize SimplestExpr
-static std::unique_ptr<SimplestExpr> DeserializeExpr(std::istream &in) {
+// Deserialize AQPExpr
+static std::unique_ptr<AQPExpr> DeserializeExpr(std::istream &in) {
   SimplestNodeType node_type;
   in.read(reinterpret_cast<char *>(&node_type), sizeof(node_type));
 
@@ -233,13 +233,13 @@ static std::unique_ptr<SimplestExpr> DeserializeExpr(std::istream &in) {
   }
   default:
     throw std::runtime_error(
-        "Unknown SimplestExpr node type during deserialization: " +
+        "Unknown AQPExpr node type during deserialization: " +
         std::to_string(node_type));
   }
 }
 
-// Serialize SimplestStmt
-static void SerializeStmt(std::ostream &out, const SimplestStmt *stmt) {
+// Serialize AQPStmt
+static void SerializeStmt(std::ostream &out, const AQPStmt *stmt) {
   if (!stmt) {
     SimplestNodeType null_type = InvalidNodeType;
     out.write(reinterpret_cast<const char *>(&null_type), sizeof(null_type));
@@ -405,13 +405,13 @@ static void SerializeStmt(std::ostream &out, const SimplestStmt *stmt) {
     break;
   }
   default:
-    throw std::runtime_error("Unknown SimplestStmt node type: " +
+    throw std::runtime_error("Unknown AQPStmt node type: " +
                              std::to_string(node_type));
   }
 }
 
-// Deserialize SimplestStmt
-static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
+// Deserialize AQPStmt
+static std::unique_ptr<AQPStmt> DeserializeStmt(std::istream &in) {
   SimplestNodeType node_type;
   in.read(reinterpret_cast<char *>(&node_type), sizeof(node_type));
 
@@ -431,7 +431,7 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
   // Deserialize qual_vec
   size_t qual_vec_size;
   in.read(reinterpret_cast<char *>(&qual_vec_size), sizeof(qual_vec_size));
-  std::vector<std::unique_ptr<SimplestExpr>> qual_vec;
+  std::vector<std::unique_ptr<AQPExpr>> qual_vec;
   for (size_t i = 0; i < qual_vec_size; i++) {
     qual_vec.push_back(DeserializeExpr(in));
   }
@@ -439,7 +439,7 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
   // Deserialize children
   size_t children_size;
   in.read(reinterpret_cast<char *>(&children_size), sizeof(children_size));
-  std::vector<std::unique_ptr<SimplestStmt>> children;
+  std::vector<std::unique_ptr<AQPStmt>> children;
   for (size_t i = 0; i < children_size; i++) {
     children.push_back(DeserializeStmt(in));
   }
@@ -454,7 +454,7 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
     in.read(reinterpret_cast<char *>(&card), sizeof(card));
 
     // Create base_stmt with children
-    auto base_stmt = std::make_unique<SimplestStmt>(std::move(children),
+    auto base_stmt = std::make_unique<AQPStmt>(std::move(children),
                                                     std::move(target_list),
                                                     SimplestNodeType::ScanNode);
 
@@ -488,7 +488,7 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
     in.read(reinterpret_cast<char *>(&card), sizeof(card));
 
     // Create base_stmt with children
-    auto base_stmt = std::make_unique<SimplestStmt>(std::move(children),
+    auto base_stmt = std::make_unique<AQPStmt>(std::move(children),
                                                     SimplestNodeType::JoinNode);
 
     // Create Join from base_stmt
@@ -503,7 +503,7 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
     in.read(reinterpret_cast<char *>(&card), sizeof(card));
 
     // Create base_stmt with children, target_list, qual_vec
-    auto base_stmt = std::make_unique<SimplestStmt>(
+    auto base_stmt = std::make_unique<AQPStmt>(
         std::move(children), std::move(target_list), std::move(qual_vec),
         SimplestNodeType::FilterNode);
 
@@ -530,7 +530,7 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
     in.read(reinterpret_cast<char *>(&card), sizeof(card));
 
     // Create base_stmt with children and target_list
-    auto base_stmt = std::make_unique<SimplestStmt>(std::move(children),
+    auto base_stmt = std::make_unique<AQPStmt>(std::move(children),
                                                     std::move(target_list),
                                                     SimplestNodeType::SortNode);
 
@@ -547,7 +547,7 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
     in.read(reinterpret_cast<char *>(&card), sizeof(card));
 
     // Create base_stmt with children and target_list
-    auto base_stmt = std::make_unique<SimplestStmt>(
+    auto base_stmt = std::make_unique<AQPStmt>(
         std::move(children), std::move(target_list),
         SimplestNodeType::ProjectionNode);
 
@@ -571,7 +571,7 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
     in.read(reinterpret_cast<char *>(&card), sizeof(card));
 
     // Create base_stmt with children and target_list (for column type info)
-    auto base_stmt = std::make_unique<SimplestStmt>(
+    auto base_stmt = std::make_unique<AQPStmt>(
         std::move(children), std::move(target_list), SimplestNodeType::ChunkNode);
 
     auto chunk = std::make_unique<SimplestChunk>(std::move(base_stmt),
@@ -625,7 +625,7 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
     in.read(reinterpret_cast<char *>(&card), sizeof(card));
 
     // Create base_stmt with children and target_list
-    auto base_stmt = std::make_unique<SimplestStmt>(
+    auto base_stmt = std::make_unique<AQPStmt>(
         std::move(children), std::move(target_list),
         SimplestNodeType::AggregateNode);
 
@@ -637,13 +637,13 @@ static std::unique_ptr<SimplestStmt> DeserializeStmt(std::istream &in) {
   }
   default:
     throw std::runtime_error(
-        "Unknown SimplestStmt node type during deserialization: " +
+        "Unknown AQPStmt node type during deserialization: " +
         std::to_string(node_type));
   }
 }
 
 // Public API: Save SimplestIR to file
-void SaveSimplestIRToFile(const std::unique_ptr<SimplestStmt> &ir,
+void SaveSimplestIRToFile(const std::unique_ptr<AQPStmt> &ir,
                           const std::string &filename) {
   std::ofstream file(filename, std::ios::binary);
   if (!file.is_open()) {
@@ -663,7 +663,7 @@ void SaveSimplestIRToFile(const std::unique_ptr<SimplestStmt> &ir,
 }
 
 // Public API: Load SimplestIR from file
-std::unique_ptr<SimplestStmt>
+std::unique_ptr<AQPStmt>
 LoadSimplestIRFromFile(const std::string &filename) {
   std::ifstream file(filename, std::ios::binary);
   if (!file.is_open()) {

@@ -25,31 +25,31 @@ void CleanupSchemaParser();
 // Get the global schema parser
 SchemaParser *GetSchemaParser();
 
-std::vector<std::unique_ptr<SimplestStmt>>
+std::vector<std::unique_ptr<AQPStmt>>
 ConvertNodeStrToIRFromFile(const std::string &nodestr_file_name);
 
-std::unique_ptr<SimplestStmt> ConvertNodeStrToIR(const std::string &nodestr,
+std::unique_ptr<AQPStmt> ConvertNodeStrToIR(const std::string &nodestr,
                                                  size_t query_id);
 
 // Convert SimplestIR to PostgreSQL nodestring format
 std::string
-ConvertIRToNodeStr(const std::unique_ptr<SimplestStmt> &simplest_ir);
+ConvertIRToNodeStr(const std::unique_ptr<AQPStmt> &simplest_ir);
 
 // Convert parse tree to IR (without schema - column indices will be 0)
-std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const json &parse_tree,
+std::unique_ptr<AQPStmt> ConvertParseTreeToIR(const json &parse_tree,
                                                    unsigned int sub_plan_id);
 
 // Convert parse tree to IR with schema parser for correct column indices
-std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const json &parse_tree,
+std::unique_ptr<AQPStmt> ConvertParseTreeToIR(const json &parse_tree,
                                                    unsigned int sub_plan_id,
                                                    const SchemaParser *schema);
 
 // Convert parse tree to IR using global schema parser
-std::unique_ptr<SimplestStmt>
+std::unique_ptr<AQPStmt>
 ConvertParseTreeToIRWithSchema(const json &parse_tree,
                                unsigned int sub_plan_id);
 
-std::unique_ptr<SimplestStmt> ConvertDuckDBPlanToIR(
+std::unique_ptr<AQPStmt> ConvertDuckDBPlanToIR(
     duckdb::Binder &binder, duckdb::ClientContext &context,
     duckdb::LogicalOperator *duckdb_plan_pointer,
     const std::unordered_map<unsigned int, std::string> &intermediate_table_map,
@@ -59,20 +59,20 @@ std::unique_ptr<SimplestStmt> ConvertDuckDBPlanToIR(
 
 duckdb::unique_ptr<duckdb::LogicalOperator> ConvertIRToDuckDBPlan(
     duckdb::Binder &binder, duckdb::ClientContext &context,
-    const std::unique_ptr<SimplestStmt> &simplest_ir,
+    const std::unique_ptr<AQPStmt> &simplest_ir,
     std::unordered_map<duckdb::idx_t,
                        duckdb::unique_ptr<duckdb::ColumnDataCollection>>
         *intermediate_results = nullptr);
 
-std::string ConvertIRToSQL(SimplestStmt &simplest_stmt, size_t query_id,
+std::string ConvertIRToSQL(AQPStmt &simplest_stmt, size_t query_id,
                            bool save_file = false,
                            const std::string &sql_path = "");
 
 // SimplestIR serialization/deserialization functions
-void SaveSimplestIRToFile(const std::unique_ptr<SimplestStmt> &ir,
+void SaveSimplestIRToFile(const std::unique_ptr<AQPStmt> &ir,
                           const std::string &filename);
 
-std::unique_ptr<SimplestStmt>
+std::unique_ptr<AQPStmt>
 LoadSimplestIRFromFile(const std::string &filename);
 
 } // namespace ir_sql_converter

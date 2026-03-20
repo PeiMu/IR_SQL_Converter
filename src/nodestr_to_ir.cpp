@@ -19,10 +19,10 @@ bool restore_location_fields = false;
  * fields rather than set them to -1.  This is currently only supported
  * in builds with the WRITE_READ_PARSE_PLAN_TREES debugging flag set.
  */
-std::unique_ptr<SimplestNode>
+std::unique_ptr<AQPNode>
 NodestrToIR::StringToNodeInternal(const char *str, bool restore_loc_fields) {
   const char *save_strtok;
-  std::unique_ptr<SimplestNode> node;
+  std::unique_ptr<AQPNode> node;
 
 #ifdef WRITE_READ_PARSE_PLAN_TREES
   bool save_restore_location_fields;
@@ -56,7 +56,7 @@ NodestrToIR::StringToNodeInternal(const char *str, bool restore_loc_fields) {
 
   // Post-process: populate table names in Scan nodes after parsing is complete
   if (node) {
-    auto &stmt = node->Cast<SimplestStmt>();
+    auto &stmt = node->Cast<AQPStmt>();
     PopulateTableNames(&stmt);
   }
 
@@ -66,7 +66,7 @@ NodestrToIR::StringToNodeInternal(const char *str, bool restore_loc_fields) {
 /*
  * Externally visible entry points
  */
-std::unique_ptr<SimplestNode> NodestrToIR::StringToNode(const char *str) {
+std::unique_ptr<AQPNode> NodestrToIR::StringToNode(const char *str) {
   return StringToNodeInternal(str, false);
 }
 
@@ -285,12 +285,12 @@ duckdb_libpgquery::PGNodeTag NodestrToIR::NodeTokenType(const char *token,
  */
 /// there might be more than one attrs in `targetlist`
 // todo: `return_vector` is not elegant, need to refactor
-std::unique_ptr<SimplestNode>
+std::unique_ptr<AQPNode>
 NodestrToIR::NodeRead(const char *token, int tok_len, bool return_vector,
-                      std::vector<std::unique_ptr<SimplestNode>> *node_vec) {
+                      std::vector<std::unique_ptr<AQPNode>> *node_vec) {
   duckdb_libpgquery::PGNodeTag type;
 
-  std::unique_ptr<SimplestNode> node;
+  std::unique_ptr<AQPNode> node;
 
   if (token == NULL) /* need to read a token? */
   {
@@ -521,10 +521,10 @@ std::vector<bool> NodestrToIR::ReadBoolCols(int numCols) {
   return bool_cols;
 }
 
-std::unique_ptr<SimplestStmt> NodestrToIR::ReadCommonPlan() {
+std::unique_ptr<AQPStmt> NodestrToIR::ReadCommonPlan() {
   READ_TEMP_LOCALS();
 
-  std::vector<std::unique_ptr<SimplestStmt>> children;
+  std::vector<std::unique_ptr<AQPStmt>> children;
 
   // startup_cost
   token = PG_strtok(&length);
@@ -553,40 +553,40 @@ std::unique_ptr<SimplestStmt> NodestrToIR::ReadCommonPlan() {
   // this should return a vector of vars
   // use a member variable - target_list_vec
   //     NodeRead(NULL, 0, is_a_list)
-  std::vector<std::unique_ptr<SimplestNode>> node_vec;
+  std::vector<std::unique_ptr<AQPNode>> node_vec;
   std::vector<std::unique_ptr<SimplestAttr>> attr_vec;
   NodeRead(NULL, 0, true, &node_vec);
   for (auto &node : node_vec) {
     if (node)
       attr_vec.emplace_back(
-          unique_ptr_cast<SimplestNode, SimplestAttr>(std::move(node)));
+          unique_ptr_cast<AQPNode, SimplestAttr>(std::move(node)));
   }
   // qual
   // e.g. `qual` should be an expr, if we have more than one `qual`,
   // we need to change the `NodeRead()` to
-  // `std::vector<std::unique_ptr<SimplestNode>>`
+  // `std::vector<std::unique_ptr<AQPNode>>`
   token = PG_strtok(&length);
   (void)token;
   node_vec.clear();
-  std::vector<std::unique_ptr<SimplestExpr>> qual_vec;
+  std::vector<std::unique_ptr<AQPExpr>> qual_vec;
   auto qual_node = NodeRead(NULL, 0, true, &node_vec);
   for (auto &node : node_vec) {
     if (node)
       qual_vec.emplace_back(
-          unique_ptr_cast<SimplestNode, SimplestExpr>(std::move(node)));
+          unique_ptr_cast<AQPNode, AQPExpr>(std::move(node)));
   }
   // lefttree
   token = PG_strtok(&length);
   (void)token;
-  std::unique_ptr<SimplestStmt> left_tree_stmt =
-      unique_ptr_cast<SimplestNode, SimplestStmt>(NodeRead(NULL, 0));
+  std::unique_ptr<AQPStmt> left_tree_stmt =
+      unique_ptr_cast<AQPNode, AQPStmt>(NodeRead(NULL, 0));
   if (left_tree_stmt)
     children.emplace_back(std::move(left_tree_stmt));
   // righttree
   token = PG_strtok(&length);
   (void)token;
-  std::unique_ptr<SimplestStmt> right_tree_stmt =
-      unique_ptr_cast<SimplestNode, SimplestStmt>(NodeRead(NULL, 0));
+  std::unique_ptr<AQPStmt> right_tree_stmt =
+      unique_ptr_cast<AQPNode, AQPStmt>(NodeRead(NULL, 0));
   if (right_tree_stmt)
     children.emplace_back(std::move(right_tree_stmt));
   // initPlan
@@ -603,10 +603,10 @@ std::unique_ptr<SimplestStmt> NodestrToIR::ReadCommonPlan() {
   ReadBitmapset();
 
   if (children.empty())
-    return std::make_unique<SimplestStmt>(std::move(attr_vec),
+    return std::make_unique<AQPStmt>(std::move(attr_vec),
                                           std::move(qual_vec), StmtNode);
   else
-    return std::make_unique<SimplestStmt>(std::move(children),
+    return std::make_unique<AQPStmt>(std::move(children),
                                           std::move(attr_vec),
                                           std::move(qual_vec), StmtNode);
 }
@@ -614,7 +614,7 @@ std::unique_ptr<SimplestStmt> NodestrToIR::ReadCommonPlan() {
 std::unique_ptr<SimplestAggregate> NodestrToIR::ReadAgg() {
   READ_TEMP_LOCALS();
 
-  std::unique_ptr<SimplestStmt> common_stmt = ReadCommonPlan();
+  std::unique_ptr<AQPStmt> common_stmt = ReadCommonPlan();
   std::vector<SimplestVarType> agg_type_vec;
   for (const auto &target : common_stmt->target_list) {
     agg_type_vec.emplace_back(target->GetType());
@@ -696,7 +696,7 @@ std::unique_ptr<SimplestAttr> NodestrToIR::ReadAggref() {
   (void)token;
   auto args_node = NodeRead(NULL, 0);
   std::unique_ptr<SimplestAttr> aggr_attr =
-      unique_ptr_cast<SimplestNode, SimplestAttr>(std::move(args_node));
+      unique_ptr_cast<AQPNode, SimplestAttr>(std::move(args_node));
   std::unique_ptr<SimplestAttr> aggr_attr_other =
       std::make_unique<SimplestAttr>(*aggr_attr);
   agg_fns.emplace_back(std::make_pair(std::move(aggr_attr_other), agg_fn_type));
@@ -737,10 +737,10 @@ std::unique_ptr<SimplestAttr> NodestrToIR::ReadAggref() {
   return aggr_attr;
 }
 
-std::unique_ptr<SimplestNode> NodestrToIR::ReadTargetEntry() {
+std::unique_ptr<AQPNode> NodestrToIR::ReadTargetEntry() {
   READ_TEMP_LOCALS();
 
-  std::unique_ptr<SimplestNode> node;
+  std::unique_ptr<AQPNode> node;
 
   // expr
   // check if TARGETENTRY has only one expr
@@ -817,7 +817,7 @@ std::unique_ptr<SimplestAttr> NodestrToIR::ReadRelabelType() {
   (void)token;
   auto arg_node = NodeRead(NULL, 0);
   std::unique_ptr<SimplestAttr> arg_attr =
-      unique_ptr_cast<SimplestNode, SimplestAttr>(std::move(arg_node));
+      unique_ptr_cast<AQPNode, SimplestAttr>(std::move(arg_node));
   // resulttype
   token = PG_strtok(&length);
   token = PG_strtok(&length);
@@ -896,7 +896,7 @@ void NodestrToIR::ReadGather() {
 std::unique_ptr<SimplestJoin> NodestrToIR::ReadCommonJoin() {
   READ_TEMP_LOCALS();
 
-  std::unique_ptr<SimplestStmt> common_stmt = ReadCommonPlan();
+  std::unique_ptr<AQPStmt> common_stmt = ReadCommonPlan();
 
   // jointype
   token = PG_strtok(&length);
@@ -908,13 +908,13 @@ std::unique_ptr<SimplestJoin> NodestrToIR::ReadCommonJoin() {
   // joinqual
   token = PG_strtok(&length);
   (void)token;
-  std::vector<std::unique_ptr<SimplestNode>> node_vec;
+  std::vector<std::unique_ptr<AQPNode>> node_vec;
   std::vector<std::unique_ptr<SimplestVarComparison>> join_conditions;
   auto qual_node = NodeRead(NULL, 0, true, &node_vec);
   for (auto &node : node_vec) {
     if (node)
       join_conditions.emplace_back(
-          unique_ptr_cast<SimplestNode, SimplestVarComparison>(
+          unique_ptr_cast<AQPNode, SimplestVarComparison>(
               std::move(node)));
   }
 
@@ -929,18 +929,18 @@ std::unique_ptr<SimplestJoin> NodestrToIR::ReadCommonJoin() {
 std::unique_ptr<SimplestHash> NodestrToIR::ReadHash() {
   READ_TEMP_LOCALS();
 
-  std::unique_ptr<SimplestStmt> common_plan = ReadCommonPlan();
+  std::unique_ptr<AQPStmt> common_plan = ReadCommonPlan();
 
   // hashkeys
   token = PG_strtok(&length);
   (void)token;
-  std::vector<std::unique_ptr<SimplestNode>> node_vec;
+  std::vector<std::unique_ptr<AQPNode>> node_vec;
   std::vector<std::unique_ptr<SimplestAttr>> hash_keys;
   NodeRead(NULL, 0, true, &node_vec);
   for (auto &node : node_vec) {
     if (node)
       hash_keys.emplace_back(
-          unique_ptr_cast<SimplestNode, SimplestAttr>(std::move(node)));
+          unique_ptr_cast<AQPNode, SimplestAttr>(std::move(node)));
   }
   // skewTable
   token = PG_strtok(&length);
@@ -971,14 +971,14 @@ std::unique_ptr<SimplestJoin> NodestrToIR::ReadHashJoin() {
   token = PG_strtok(&length);
   (void)token;
   // this should get a vector of exprs
-  std::vector<std::unique_ptr<SimplestNode>> node_vec;
+  std::vector<std::unique_ptr<AQPNode>> node_vec;
   // todo: need to check if it's always SimplestVarComparison
   std::vector<std::unique_ptr<SimplestVarComparison>> join_conditions;
   NodeRead(NULL, 0, true, &node_vec);
   for (auto &node : node_vec) {
     if (node)
       join_conditions.emplace_back(
-          unique_ptr_cast<SimplestNode, SimplestVarComparison>(
+          unique_ptr_cast<AQPNode, SimplestVarComparison>(
               std::move(node)));
   }
   common_join->AddJoinCondition(std::move(join_conditions));
@@ -1010,14 +1010,14 @@ std::unique_ptr<SimplestJoin> NodestrToIR::ReadMergeJoin() {
   token = PG_strtok(&length);
   (void)token;
   // this should get a vector of exprs
-  std::vector<std::unique_ptr<SimplestNode>> node_vec;
+  std::vector<std::unique_ptr<AQPNode>> node_vec;
   // todo: need to check if it's always SimplestVarComparison
   std::vector<std::unique_ptr<SimplestVarComparison>> join_conditions;
   NodeRead(NULL, 0, true, &node_vec);
   for (auto &node : node_vec) {
     if (node)
       join_conditions.emplace_back(
-          unique_ptr_cast<SimplestNode, SimplestVarComparison>(
+          unique_ptr_cast<AQPNode, SimplestVarComparison>(
               std::move(node)));
   }
   int cond_num = join_conditions.size();
@@ -1046,9 +1046,9 @@ std::unique_ptr<SimplestJoin> NodestrToIR::ReadNestLoop() {
   // nestParams
   token = PG_strtok(&length);
   (void)token;
-  std::unique_ptr<SimplestNode> nest_params_node = NodeRead(NULL, 0);
+  std::unique_ptr<AQPNode> nest_params_node = NodeRead(NULL, 0);
   std::unique_ptr<SimplestVarComparison> nest_loop_cond =
-      unique_ptr_cast<SimplestNode, SimplestVarComparison>(
+      unique_ptr_cast<AQPNode, SimplestVarComparison>(
           std::move(nest_params_node));
 
   if (nest_loop_cond) {
@@ -1072,9 +1072,9 @@ std::unique_ptr<SimplestVarComparison> NodestrToIR::ReadNestLoopParam() {
   // paramval
   token = PG_strtok(&length);
   (void)token;
-  std::unique_ptr<SimplestNode> node = NodeRead(NULL, 0);
+  std::unique_ptr<AQPNode> node = NodeRead(NULL, 0);
   std::unique_ptr<SimplestAttr> param_val =
-      unique_ptr_cast<SimplestNode, SimplestAttr>(std::move(node));
+      unique_ptr_cast<AQPNode, SimplestAttr>(std::move(node));
   // update the param_val's table/column index in the nest-loop join condition
   // <paramno, <paramval.varnoold, paramval.varoattno>>
   auto find = std::find_if(
@@ -1097,7 +1097,7 @@ std::unique_ptr<SimplestScan> NodestrToIR::ReadCommonScan() {
   READ_TEMP_LOCALS();
 
   // common_plan
-  std::unique_ptr<SimplestStmt> common_plan = ReadCommonPlan();
+  std::unique_ptr<AQPStmt> common_plan = ReadCommonPlan();
   // scanrelid
   token = PG_strtok(&length);
   token = PG_strtok(&length);
@@ -1133,7 +1133,7 @@ std::unique_ptr<SimplestScan> NodestrToIR::ReadIndexScan() {
   // indexqual
   token = PG_strtok(&length);
   (void)token;
-  std::vector<std::unique_ptr<SimplestNode>> node_vec;
+  std::vector<std::unique_ptr<AQPNode>> node_vec;
   NodeRead(NULL, 0, true, &node_vec);
   for (auto &node : node_vec) {
     if (node) {
@@ -1148,7 +1148,7 @@ std::unique_ptr<SimplestScan> NodestrToIR::ReadIndexScan() {
   for (auto &node : node_vec) {
     if (node)
       index_conditions.emplace_back(
-          unique_ptr_cast<SimplestNode, SimplestVarParamComparison>(
+          unique_ptr_cast<AQPNode, SimplestVarParamComparison>(
               std::move(node)));
   }
   // indexorderby
@@ -1179,7 +1179,7 @@ std::unique_ptr<SimplestScan> NodestrToIR::ReadIndexOnlyScan() {
   token = PG_strtok(&length);
   token = PG_strtok(&length);
   // indexqual
-  std::vector<std::unique_ptr<SimplestNode>> node_vec;
+  std::vector<std::unique_ptr<AQPNode>> node_vec;
   // we should rely on this as the nest loop join condition
   token = PG_strtok(&length);
   (void)token;
@@ -1187,7 +1187,7 @@ std::unique_ptr<SimplestScan> NodestrToIR::ReadIndexOnlyScan() {
   for (auto &node : node_vec) {
     if (node)
       index_conditions.emplace_back(
-          unique_ptr_cast<SimplestNode, SimplestVarParamComparison>(
+          unique_ptr_cast<AQPNode, SimplestVarParamComparison>(
               std::move(node)));
   }
   // indexorderby
@@ -1213,7 +1213,7 @@ std::unique_ptr<SimplestScan> NodestrToIR::ReadBitmapHeapScan() {
   // bitmapqualorig
   token = PG_strtok(&length);
   (void)token;
-  std::vector<std::unique_ptr<SimplestNode>> node_vec;
+  std::vector<std::unique_ptr<AQPNode>> node_vec;
   NodeRead(NULL, 0, true, &node_vec);
   for (auto &node : node_vec) {
     if (node) {
@@ -1224,7 +1224,7 @@ std::unique_ptr<SimplestScan> NodestrToIR::ReadBitmapHeapScan() {
   return common_scan;
 }
 
-std::unique_ptr<SimplestNode> NodestrToIR::ReadBitmapIndexScan() {
+std::unique_ptr<AQPNode> NodestrToIR::ReadBitmapIndexScan() {
   READ_TEMP_LOCALS();
 
   // common scan
@@ -1238,7 +1238,7 @@ std::unique_ptr<SimplestNode> NodestrToIR::ReadBitmapIndexScan() {
   // indexqual
   token = PG_strtok(&length);
   (void)token;
-  std::vector<std::unique_ptr<SimplestNode>> node_vec;
+  std::vector<std::unique_ptr<AQPNode>> node_vec;
   NodeRead(NULL, 0, true, &node_vec);
   for (auto &node : node_vec) {
     if (node) {
@@ -1253,16 +1253,16 @@ std::unique_ptr<SimplestNode> NodestrToIR::ReadBitmapIndexScan() {
   for (auto &node : node_vec) {
     if (node)
       index_conditions.emplace_back(
-          unique_ptr_cast<SimplestNode, SimplestVarParamComparison>(
+          unique_ptr_cast<AQPNode, SimplestVarParamComparison>(
               std::move(node)));
   }
-  return std::unique_ptr<SimplestNode>();
+  return std::unique_ptr<AQPNode>();
 }
 
 std::unique_ptr<SimplestSort> NodestrToIR::ReadSort() {
   READ_TEMP_LOCALS();
 
-  std::unique_ptr<SimplestStmt> common_stmt = ReadCommonPlan();
+  std::unique_ptr<AQPStmt> common_stmt = ReadCommonPlan();
   // numCols
   token = PG_strtok(&length);
   token = PG_strtok(&length);
@@ -1293,7 +1293,7 @@ std::unique_ptr<SimplestSort> NodestrToIR::ReadSort() {
   return std::make_unique<SimplestSort>(std::move(common_stmt), order_vec);
 }
 
-std::unique_ptr<SimplestExpr> NodestrToIR::ReadOpExpr() {
+std::unique_ptr<AQPExpr> NodestrToIR::ReadOpExpr() {
   READ_TEMP_LOCALS();
 
   // opno
@@ -1318,14 +1318,14 @@ std::unique_ptr<SimplestExpr> NodestrToIR::ReadOpExpr() {
   // args
   token = PG_strtok(&length);
   (void)token;
-  std::vector<std::unique_ptr<SimplestNode>> node_vec;
+  std::vector<std::unique_ptr<AQPNode>> node_vec;
   std::vector<std::unique_ptr<SimplestVar>> var_vec;
   NodeRead(NULL, 0, true, &node_vec);
   assert(node_vec.size() == 2);
   for (auto &node : node_vec) {
     if (node)
       var_vec.emplace_back(
-          unique_ptr_cast<SimplestNode, SimplestVar>(std::move(node)));
+          unique_ptr_cast<AQPNode, SimplestVar>(std::move(node)));
   }
   // todo: need to confirm if the var_vec[0] is always a variable
   assert(!var_vec[0]->IsConst());
@@ -1376,8 +1376,8 @@ std::unique_ptr<SimplestLogicalExpr> NodestrToIR::ReadBoolExpr() {
   // args
   token = PG_strtok(&length);
   (void)token;
-  std::vector<std::unique_ptr<SimplestNode>> node_vec;
-  std::vector<std::unique_ptr<SimplestExpr>> expr_vec;
+  std::vector<std::unique_ptr<AQPNode>> node_vec;
+  std::vector<std::unique_ptr<AQPExpr>> expr_vec;
   NodeRead(NULL, 0, true, &node_vec);
   assert((LogicalNot == logical_op && node_vec.size() == 1) ||
          ((LogicalAnd == logical_op || LogicalOr == logical_op) &&
@@ -1385,7 +1385,7 @@ std::unique_ptr<SimplestLogicalExpr> NodestrToIR::ReadBoolExpr() {
   for (auto &node : node_vec) {
     if (node)
       expr_vec.emplace_back(
-          unique_ptr_cast<SimplestNode, SimplestExpr>(std::move(node)));
+          unique_ptr_cast<AQPNode, AQPExpr>(std::move(node)));
   }
   // location
   token = PG_strtok(&length);
@@ -1415,7 +1415,7 @@ std::unique_ptr<SimplestIsNullExpr> NodestrToIR::ReadNullTest() {
   (void)token;
   auto arg_node = NodeRead(NULL, 0);
   std::unique_ptr<SimplestAttr> arg_attr =
-      unique_ptr_cast<SimplestNode, SimplestAttr>(std::move(arg_node));
+      unique_ptr_cast<AQPNode, SimplestAttr>(std::move(arg_node));
   // nulltesttype
   token = PG_strtok(&length);
   token = PG_strtok(&length);
@@ -1437,7 +1437,7 @@ std::unique_ptr<SimplestIsNullExpr> NodestrToIR::ReadNullTest() {
                                               std::move(arg_attr));
 }
 
-std::unique_ptr<SimplestExpr> NodestrToIR::ReadScalarArrayOpExpr() {
+std::unique_ptr<AQPExpr> NodestrToIR::ReadScalarArrayOpExpr() {
   READ_TEMP_LOCALS();
 
   // opno
@@ -1456,14 +1456,14 @@ std::unique_ptr<SimplestExpr> NodestrToIR::ReadScalarArrayOpExpr() {
   // args
   token = PG_strtok(&length);
   (void)token;
-  std::vector<std::unique_ptr<SimplestNode>> node_vec;
+  std::vector<std::unique_ptr<AQPNode>> node_vec;
   std::vector<std::unique_ptr<SimplestVar>> var_vec;
   NodeRead(NULL, 0, true, &node_vec);
   assert(node_vec.size() == 2);
   for (auto &node : node_vec) {
     if (node)
       var_vec.emplace_back(
-          unique_ptr_cast<SimplestNode, SimplestVar>(std::move(node)));
+          unique_ptr_cast<AQPNode, SimplestVar>(std::move(node)));
   }
   // todo: need to confirm if the var_vec[0] is always a variable
   assert(!var_vec[0]->IsConst());
@@ -1485,7 +1485,7 @@ std::unique_ptr<SimplestExpr> NodestrToIR::ReadScalarArrayOpExpr() {
   }
 }
 
-std::unique_ptr<SimplestStmt> NodestrToIR::ReadMaterial() {
+std::unique_ptr<AQPStmt> NodestrToIR::ReadMaterial() {
   auto material_node = ReadCommonPlan();
 
   // todo: support MaterialNode
@@ -1632,7 +1632,7 @@ std::unique_ptr<SimplestConstVar> NodestrToIR::ReadConst() {
   }
 }
 
-std::unique_ptr<SimplestStmt> NodestrToIR::ReadPlannedStmt() {
+std::unique_ptr<AQPStmt> NodestrToIR::ReadPlannedStmt() {
   READ_TEMP_LOCALS();
 
   // commandType
@@ -1665,8 +1665,8 @@ std::unique_ptr<SimplestStmt> NodestrToIR::ReadPlannedStmt() {
   // planTree
   token = PG_strtok(&length);
   (void)token;
-  std::unique_ptr<SimplestStmt> plan_tree =
-      unique_ptr_cast<SimplestNode, SimplestStmt>(NodeRead(NULL, 0));
+  std::unique_ptr<AQPStmt> plan_tree =
+      unique_ptr_cast<AQPNode, AQPStmt>(NodeRead(NULL, 0));
   // rtable
   token = PG_strtok(&length);
   (void)token;
@@ -1901,13 +1901,13 @@ void NodestrToIR::ReadAlias() {
   // colnames
   token = PG_strtok(&length);
   (void)token;
-  std::vector<std::unique_ptr<SimplestNode>> node_vec;
+  std::vector<std::unique_ptr<AQPNode>> node_vec;
   std::vector<std::unique_ptr<SimplestLiteral>> col_name_vec;
   NodeRead(NULL, 0, true, &node_vec);
   for (auto &node : node_vec) {
     if (node)
       col_name_vec.emplace_back(
-          unique_ptr_cast<SimplestNode, SimplestLiteral>(std::move(node)));
+          unique_ptr_cast<AQPNode, SimplestLiteral>(std::move(node)));
   }
   if (!col_name_vec.empty()) {
     table_str table_col_pair;
@@ -2134,7 +2134,7 @@ SimplestAggFnType NodestrToIR::GetSimplestAggFnType(unsigned int aggfnoid) {
   return simplest_agg_fn_type;
 }
 
-std::unique_ptr<SimplestNode> NodestrToIR::ParseNodeString() {
+std::unique_ptr<AQPNode> NodestrToIR::ParseNodeString() {
   READ_TEMP_LOCALS();
 
   /* Guard against stack overflow due to overly complex expressions */
@@ -2145,7 +2145,7 @@ std::unique_ptr<SimplestNode> NodestrToIR::ParseNodeString() {
 #define MATCH(tokname, namelen)                                                \
   (length == namelen && memcmp(token, tokname, namelen) == 0)
 
-  std::unique_ptr<SimplestNode> node;
+  std::unique_ptr<AQPNode> node;
   // debug
   if (MATCH("AGG", 3))
     node = ReadAgg();
@@ -2210,8 +2210,8 @@ std::unique_ptr<SimplestNode> NodestrToIR::ParseNodeString() {
   return node;
 }
 
-std::unique_ptr<SimplestStmt>
-NodestrToIR::GenerateProjHead(std::unique_ptr<SimplestStmt> postgres_stmt,
+std::unique_ptr<AQPStmt>
+NodestrToIR::GenerateProjHead(std::unique_ptr<AQPStmt> postgres_stmt,
                               size_t sub_plan_id) {
   auto table_index = UINT_MAX - sub_plan_id;
 
@@ -2223,20 +2223,20 @@ NodestrToIR::GenerateProjHead(std::unique_ptr<SimplestStmt> postgres_stmt,
     target_list.emplace_back(std::move(simplest_target));
   }
 
-  std::vector<std::unique_ptr<SimplestStmt>> children;
+  std::vector<std::unique_ptr<AQPStmt>> children;
   children.emplace_back(std::move(postgres_stmt));
-  auto base_stmt = std::make_unique<SimplestStmt>(
+  auto base_stmt = std::make_unique<AQPStmt>(
       std::move(children), std::move(target_list),
       SimplestNodeType::ProjectionNode);
 
   auto simplest_projection =
       std::make_unique<SimplestProjection>(std::move(base_stmt), table_index);
 
-  return unique_ptr_cast<SimplestStmt, SimplestProjection>(
+  return unique_ptr_cast<AQPStmt, SimplestProjection>(
       std::move(simplest_projection));
 }
 
-void NodestrToIR::PopulateTableNames(SimplestStmt *stmt) {
+void NodestrToIR::PopulateTableNames(AQPStmt *stmt) {
   if (!stmt)
     return;
 
@@ -2308,7 +2308,7 @@ void NodestrToIR::PopulateColumnName(SimplestAttr *attr) {
   }
 }
 
-void NodestrToIR::PopulateColumnNamesInExpr(SimplestExpr *expr) {
+void NodestrToIR::PopulateColumnNamesInExpr(AQPExpr *expr) {
   if (!expr)
     return;
 

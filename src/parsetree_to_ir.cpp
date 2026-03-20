@@ -5,7 +5,7 @@
 #include <nlohmann/json.hpp>
 
 namespace ir_sql_converter {
-std::unique_ptr<SimplestStmt> ParseTreeToIR::Convert(const json &parse_tree,
+std::unique_ptr<AQPStmt> ParseTreeToIR::Convert(const json &parse_tree,
                                                      unsigned int sub_plan_id) {
   Clear();
 
@@ -25,11 +25,11 @@ std::unique_ptr<SimplestStmt> ParseTreeToIR::Convert(const json &parse_tree,
   return ConvertSelectStmt(select_stmt, sub_plan_id);
 }
 
-std::unique_ptr<SimplestStmt>
+std::unique_ptr<AQPStmt>
 ParseTreeToIR::ConvertSelectStmt(const json &select_node,
                                  unsigned int sub_plan_id) {
   // Convert FROM clause first (builds table index map)
-  std::unique_ptr<SimplestStmt> from_tree = nullptr;
+  std::unique_ptr<AQPStmt> from_tree = nullptr;
   if (select_node.contains("fromClause") &&
       !select_node["fromClause"].empty()) {
     from_tree = ConvertFromClause(select_node["fromClause"]);
@@ -42,7 +42,7 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node,
   }
 
   // Convert WHERE clause and separate join conditions from filter conditions
-  std::vector<std::unique_ptr<SimplestExpr>> filter_conditions;
+  std::vector<std::unique_ptr<AQPExpr>> filter_conditions;
   std::vector<std::unique_ptr<SimplestVarComparison>> join_conditions;
 
   if (select_node.contains("whereClause")) {
@@ -57,7 +57,7 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node,
   }
 
   // Build IR tree
-  std::unique_ptr<SimplestStmt> result_tree;
+  std::unique_ptr<AQPStmt> result_tree;
 
   if (from_tree) {
     result_tree = std::move(from_tree);
@@ -71,7 +71,7 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node,
         //        ConstructCrossProduct();
         // CrossProduct has children - split into left and right for Join
         auto cross_product =
-            unique_ptr_cast<SimplestStmt, SimplestCrossProduct>(
+            unique_ptr_cast<AQPStmt, SimplestCrossProduct>(
                 std::move(result_tree));
 
         if (cross_product->children.size() >= 2) {
@@ -82,22 +82,22 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node,
           // If there are more than 2 children, rebuild the right side as nested
           // CrossProducts
           for (size_t i = 2; i < cross_product->children.size(); i++) {
-            std::vector<std::unique_ptr<SimplestStmt>> cp_children;
+            std::vector<std::unique_ptr<AQPStmt>> cp_children;
             cp_children.push_back(std::move(right_child));
             cp_children.push_back(std::move(cross_product->children[i]));
 
-            auto base = std::make_unique<SimplestStmt>(
+            auto base = std::make_unique<AQPStmt>(
                 std::move(cp_children), SimplestNodeType::StmtNode);
             right_child =
                 std::make_unique<SimplestCrossProduct>(std::move(base));
           }
 
           // Create Join with left and right children
-          std::vector<std::unique_ptr<SimplestStmt>> join_children;
+          std::vector<std::unique_ptr<AQPStmt>> join_children;
           join_children.push_back(std::move(left_child));
           join_children.push_back(std::move(right_child));
 
-          auto base_stmt = std::make_unique<SimplestStmt>(
+          auto base_stmt = std::make_unique<AQPStmt>(
               std::move(join_children),
               std::vector<std::unique_ptr<SimplestAttr>>(),
               SimplestNodeType::StmtNode);
@@ -120,13 +120,13 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node,
     // Add filter conditions (non-join conditions) as Filter node if present
     if (!filter_conditions.empty()) {
       // Rebuild filter conditions with AND if we have multiple conditions
-      std::vector<std::unique_ptr<SimplestExpr>> combined_filters;
+      std::vector<std::unique_ptr<AQPExpr>> combined_filters;
 
       if (filter_conditions.size() == 1) {
         combined_filters.push_back(std::move(filter_conditions[0]));
       } else {
         // Chain all filter conditions with AND
-        std::unique_ptr<SimplestExpr> combined =
+        std::unique_ptr<AQPExpr> combined =
             std::move(filter_conditions[0]);
         for (size_t i = 1; i < filter_conditions.size(); i++) {
           combined = std::make_unique<SimplestLogicalExpr>(
@@ -136,10 +136,10 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node,
         combined_filters.push_back(std::move(combined));
       }
 
-      std::vector<std::unique_ptr<SimplestStmt>> filter_children;
+      std::vector<std::unique_ptr<AQPStmt>> filter_children;
       filter_children.push_back(std::move(result_tree));
 
-      auto filter_base = std::make_unique<SimplestStmt>(
+      auto filter_base = std::make_unique<AQPStmt>(
           std::move(filter_children),
           std::vector<std::unique_ptr<SimplestAttr>>(),
           SimplestNodeType::StmtNode);
@@ -149,10 +149,10 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node,
     }
 
     // Create Projection node on top with target_list
-    std::vector<std::unique_ptr<SimplestStmt>> proj_children;
+    std::vector<std::unique_ptr<AQPStmt>> proj_children;
     proj_children.push_back(std::move(result_tree));
 
-    auto proj_base = std::make_unique<SimplestStmt>(std::move(proj_children),
+    auto proj_base = std::make_unique<AQPStmt>(std::move(proj_children),
                                                     std::move(target_list),
                                                     SimplestNodeType::StmtNode);
     auto table_index = UINT_MAX - sub_plan_id;
@@ -161,8 +161,8 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node,
   } else {
     // No FROM clause - just a projection
     std::cout << "Warning: No FROM clause - just a projection" << std::endl;
-    std::vector<std::unique_ptr<SimplestStmt>> empty_children;
-    auto proj_base = std::make_unique<SimplestStmt>(std::move(empty_children),
+    std::vector<std::unique_ptr<AQPStmt>> empty_children;
+    auto proj_base = std::make_unique<AQPStmt>(std::move(empty_children),
                                                     std::move(target_list),
                                                     SimplestNodeType::StmtNode);
     auto table_index = UINT_MAX - sub_plan_id;
@@ -176,10 +176,10 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node,
     std::vector<std::unique_ptr<SimplestAttr>> saved_target_list =
         std::move(result_tree->target_list);
 
-    std::vector<std::unique_ptr<SimplestStmt>> agg_children;
+    std::vector<std::unique_ptr<AQPStmt>> agg_children;
     agg_children.push_back(std::move(result_tree));
 
-    auto agg_base = std::make_unique<SimplestStmt>(std::move(agg_children),
+    auto agg_base = std::make_unique<AQPStmt>(std::move(agg_children),
                                                    std::move(saved_target_list),
                                                    SimplestNodeType::StmtNode);
 
@@ -190,14 +190,14 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node,
   return result_tree;
 }
 
-std::unique_ptr<SimplestStmt>
+std::unique_ptr<AQPStmt>
 ParseTreeToIR::ConvertFromClause(const json &from_list) {
   if (from_list.empty()) {
     return nullptr;
   }
 
   // Handle first table/join
-  std::unique_ptr<SimplestStmt> current_tree = nullptr;
+  std::unique_ptr<AQPStmt> current_tree = nullptr;
 
   for (const auto &from_item : from_list) {
     if (from_item.contains("JoinExpr")) {
@@ -208,11 +208,11 @@ ParseTreeToIR::ConvertFromClause(const json &from_list) {
         current_tree = std::move(scan);
       } else {
         // Implicit cross product - create base stmt with both children
-        std::vector<std::unique_ptr<SimplestStmt>> children;
+        std::vector<std::unique_ptr<AQPStmt>> children;
         children.push_back(std::move(current_tree));
         children.push_back(std::move(scan));
 
-        auto base_stmt = std::make_unique<SimplestStmt>(
+        auto base_stmt = std::make_unique<AQPStmt>(
             std::move(children), SimplestNodeType::StmtNode);
 
         current_tree =
@@ -224,7 +224,7 @@ ParseTreeToIR::ConvertFromClause(const json &from_list) {
   return current_tree;
 }
 
-std::unique_ptr<SimplestStmt>
+std::unique_ptr<AQPStmt>
 ParseTreeToIR::ConvertJoinExpr(const json &join_node) {
   // Convert left and right sides
   auto left_tree = ConvertFromClause({join_node["larg"]});
@@ -255,10 +255,10 @@ ParseTreeToIR::ConvertJoinExpr(const json &join_node) {
   std::vector<std::unique_ptr<SimplestVarComparison>> join_conditions;
   if (join_node.contains("quals")) {
     auto qual_exprs = ConvertWhereClause(join_node["quals"]);
-    // Convert SimplestExpr to SimplestVarComparison
+    // Convert AQPExpr to SimplestVarComparison
     for (auto &expr : qual_exprs) {
       if (expr->GetNodeType() == SimplestNodeType::VarComparisonNode) {
-        auto var_comp = unique_ptr_cast<SimplestExpr, SimplestVarComparison>(
+        auto var_comp = unique_ptr_cast<AQPExpr, SimplestVarComparison>(
             std::move(expr));
         join_conditions.emplace_back(std::move(var_comp));
       }
@@ -266,11 +266,11 @@ ParseTreeToIR::ConvertJoinExpr(const json &join_node) {
   }
 
   // Build join node
-  std::vector<std::unique_ptr<SimplestStmt>> children;
+  std::vector<std::unique_ptr<AQPStmt>> children;
   children.push_back(std::move(left_tree));
   children.push_back(std::move(right_tree));
 
-  auto base_stmt = std::make_unique<SimplestStmt>(
+  auto base_stmt = std::make_unique<AQPStmt>(
       std::move(children), std::vector<std::unique_ptr<SimplestAttr>>(),
       SimplestNodeType::StmtNode);
 
@@ -278,7 +278,7 @@ ParseTreeToIR::ConvertJoinExpr(const json &join_node) {
                                         std::move(join_conditions), join_type);
 }
 
-std::unique_ptr<SimplestStmt>
+std::unique_ptr<AQPStmt>
 ParseTreeToIR::ConvertRangeVar(const json &range_var) {
   std::string table_name = range_var["relname"];
 
@@ -292,9 +292,9 @@ ParseTreeToIR::ConvertRangeVar(const json &range_var) {
   // Create index based on the identifier (alias or table name)
   unsigned int table_index = GetOrCreateTableIndex(table_identifier);
 
-  std::vector<std::unique_ptr<SimplestStmt>> empty_children;
+  std::vector<std::unique_ptr<AQPStmt>> empty_children;
   std::vector<std::unique_ptr<SimplestAttr>> empty_attrs;
-  auto base_stmt = std::make_unique<SimplestStmt>(std::move(empty_children),
+  auto base_stmt = std::make_unique<AQPStmt>(std::move(empty_children),
                                                   std::move(empty_attrs),
                                                   SimplestNodeType::StmtNode);
 
@@ -302,9 +302,9 @@ ParseTreeToIR::ConvertRangeVar(const json &range_var) {
                                         table_name);
 }
 
-std::vector<std::unique_ptr<SimplestExpr>>
+std::vector<std::unique_ptr<AQPExpr>>
 ParseTreeToIR::ConvertWhereClause(const json &where_node) {
-  std::vector<std::unique_ptr<SimplestExpr>> exprs;
+  std::vector<std::unique_ptr<AQPExpr>> exprs;
 
   if (where_node.contains("A_Expr")) {
     exprs.push_back(ConvertAExpr(where_node["A_Expr"]));
@@ -317,7 +317,7 @@ ParseTreeToIR::ConvertWhereClause(const json &where_node) {
   return exprs;
 }
 
-std::unique_ptr<SimplestExpr>
+std::unique_ptr<AQPExpr>
 ParseTreeToIR::ConvertAExpr(const json &expr_node) {
   // Check the expression kind
   std::string kind;
@@ -326,7 +326,7 @@ ParseTreeToIR::ConvertAExpr(const json &expr_node) {
                                          : "";
   }
 
-  std::unique_ptr<SimplestExpr> result = nullptr;
+  std::unique_ptr<AQPExpr> result = nullptr;
 
   // Handle IN expressions
   if ("AEXPR_IN" == kind) {
@@ -435,7 +435,7 @@ ParseTreeToIR::ConvertAExpr(const json &expr_node) {
   return result;
 }
 
-std::unique_ptr<SimplestExpr>
+std::unique_ptr<AQPExpr>
 ParseTreeToIR::ConvertBoolExpr(const json &bool_expr) {
   SimplestLogicalOp logical_op;
 
@@ -469,7 +469,7 @@ ParseTreeToIR::ConvertBoolExpr(const json &bool_expr) {
     }
   }
 
-  std::unique_ptr<SimplestExpr> result = nullptr;
+  std::unique_ptr<AQPExpr> result = nullptr;
   json args = bool_expr["args"];
   if (logical_op == SimplestLogicalOp::LogicalNot) {
     // NOT has only one argument
@@ -497,7 +497,7 @@ ParseTreeToIR::ConvertBoolExpr(const json &bool_expr) {
   return result;
 }
 
-std::unique_ptr<SimplestExpr>
+std::unique_ptr<AQPExpr>
 ParseTreeToIR::ConvertNullTest(const json &null_test) {
   auto attr = ConvertColumnRef(null_test["arg"]["ColumnRef"]);
 
@@ -721,9 +721,9 @@ SimplestAggFnType ParseTreeToIR::GetAggFnType(const std::string &func_name) {
 }
 
 void ParseTreeToIR::ExtractJoinAndFilterConditions(
-    std::unique_ptr<SimplestExpr> expr,
+    std::unique_ptr<AQPExpr> expr,
     std::vector<std::unique_ptr<SimplestVarComparison>> &join_conditions,
-    std::vector<std::unique_ptr<SimplestExpr>> &filter_conditions) {
+    std::vector<std::unique_ptr<AQPExpr>> &filter_conditions) {
 
   if (!expr) {
     return;
@@ -734,12 +734,12 @@ void ParseTreeToIR::ExtractJoinAndFilterConditions(
   if (node_type == SimplestNodeType::VarComparisonNode) {
     // This is a join condition (column = column)
     auto var_comp_expr =
-        unique_ptr_cast<SimplestExpr, SimplestVarComparison>(std::move(expr));
+        unique_ptr_cast<AQPExpr, SimplestVarComparison>(std::move(expr));
     join_conditions.emplace_back(std::move(var_comp_expr));
   } else if (node_type == SimplestNodeType::LogicalExprNode) {
     // Recursively process logical expressions (AND/OR)
     auto logical_expr =
-        unique_ptr_cast<SimplestExpr, SimplestLogicalExpr>(std::move(expr));
+        unique_ptr_cast<AQPExpr, SimplestLogicalExpr>(std::move(expr));
 
     // For AND expressions, we can separate join and filter conditions
     // For OR expressions, we need to keep them together
@@ -760,7 +760,7 @@ void ParseTreeToIR::ExtractJoinAndFilterConditions(
     } else {
       // For OR/NOT, keep the entire expression as a filter condition
       filter_conditions.push_back(
-          unique_ptr_cast<SimplestLogicalExpr, SimplestExpr>(
+          unique_ptr_cast<SimplestLogicalExpr, AQPExpr>(
               std::move(logical_expr)));
     }
   } else {

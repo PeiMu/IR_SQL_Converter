@@ -32,9 +32,9 @@ void CleanupSchemaParser() {
 
 SchemaParser *GetSchemaParser() { return g_schema_parser; }
 
-std::vector<std::unique_ptr<SimplestStmt>>
+std::vector<std::unique_ptr<AQPStmt>>
 ConvertNodeStrToIRFromFile(const std::string &nodestr_file_name) {
-  std::vector<std::unique_ptr<SimplestStmt>> simplest_irs;
+  std::vector<std::unique_ptr<AQPStmt>> simplest_irs;
 
   // get the postgres node string
   std::ifstream input_stream(nodestr_file_name, std::ios_base::binary);
@@ -52,7 +52,7 @@ ConvertNodeStrToIRFromFile(const std::string &nodestr_file_name) {
 
   NodestrToIR nodestr_to_ir_converter;
   for (size_t i = 0; i < subqueries_num; i++) {
-    std::unique_ptr<SimplestStmt> postgres_stmt =
+    std::unique_ptr<AQPStmt> postgres_stmt =
         ConvertNodeStrToIR(query_string_vec[i], i);
 
     simplest_irs.emplace_back(std::move(postgres_stmt));
@@ -61,41 +61,41 @@ ConvertNodeStrToIRFromFile(const std::string &nodestr_file_name) {
   return simplest_irs;
 }
 
-std::unique_ptr<SimplestStmt> ConvertNodeStrToIR(const std::string &nodestr,
+std::unique_ptr<AQPStmt> ConvertNodeStrToIR(const std::string &nodestr,
                                                  size_t query_id) {
   NodestrToIR nodestr_to_ir_converter;
   nodestr_to_ir_converter.Clear();
-  std::unique_ptr<SimplestNode> postgres_plan =
+  std::unique_ptr<AQPNode> postgres_plan =
       nodestr_to_ir_converter.StringToNode(nodestr.c_str());
-  std::unique_ptr<SimplestStmt> postgres_stmt =
-      unique_ptr_cast<SimplestNode, SimplestStmt>(std::move(postgres_plan));
+  std::unique_ptr<AQPStmt> postgres_stmt =
+      unique_ptr_cast<AQPNode, AQPStmt>(std::move(postgres_plan));
   postgres_stmt = nodestr_to_ir_converter.GenerateProjHead(
       std::move(postgres_stmt), query_id);
   return std::move(postgres_stmt);
 }
 
 std::string
-ConvertIRToNodeStr(const std::unique_ptr<SimplestStmt> &simplest_ir) {
+ConvertIRToNodeStr(const std::unique_ptr<AQPStmt> &simplest_ir) {
   IRToNodestr ir_to_nodestr_converter;
   ir_to_nodestr_converter.Clear();
   std::string nodestr = ir_to_nodestr_converter.NodeToString(simplest_ir);
   return nodestr;
 }
 
-std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const json &parse_tree,
+std::unique_ptr<AQPStmt> ConvertParseTreeToIR(const json &parse_tree,
                                                    unsigned int sub_plan_id) {
   ParseTreeToIR converter;
   return converter.Convert(parse_tree, sub_plan_id);
 }
 
-std::unique_ptr<SimplestStmt> ConvertParseTreeToIR(const json &parse_tree,
+std::unique_ptr<AQPStmt> ConvertParseTreeToIR(const json &parse_tree,
                                                    unsigned int sub_plan_id,
                                                    const SchemaParser *schema) {
   ParseTreeToIR converter(schema);
   return converter.Convert(parse_tree, sub_plan_id);
 }
 
-std::unique_ptr<SimplestStmt>
+std::unique_ptr<AQPStmt>
 ConvertParseTreeToIRWithSchema(const json &parse_tree,
                                unsigned int sub_plan_id) {
   if (!g_schema_parser) {
@@ -107,7 +107,7 @@ ConvertParseTreeToIRWithSchema(const json &parse_tree,
   return ConvertParseTreeToIR(parse_tree, sub_plan_id, g_schema_parser);
 }
 
-std::unique_ptr<SimplestStmt> ConvertDuckDBPlanToIR(
+std::unique_ptr<AQPStmt> ConvertDuckDBPlanToIR(
     duckdb::Binder &binder, duckdb::ClientContext &context,
     duckdb::LogicalOperator *duckdb_plan_pointer,
     const std::unordered_map<unsigned int, std::string> &intermediate_table_map,
@@ -123,7 +123,7 @@ std::unique_ptr<SimplestStmt> ConvertDuckDBPlanToIR(
 
 duckdb::unique_ptr<duckdb::LogicalOperator> ConvertIRToDuckDBPlan(
     duckdb::Binder &binder, duckdb::ClientContext &context,
-    const std::unique_ptr<SimplestStmt> &simplest_ir,
+    const std::unique_ptr<AQPStmt> &simplest_ir,
     std::unordered_map<duckdb::idx_t,
                        duckdb::unique_ptr<duckdb::ColumnDataCollection>>
         *intermediate_results) {
@@ -132,7 +132,7 @@ duckdb::unique_ptr<duckdb::LogicalOperator> ConvertIRToDuckDBPlan(
   return std::move(duckdb_plan);
 }
 
-std::string ConvertIRToSQL(SimplestStmt &simplest_stmt, size_t query_id,
+std::string ConvertIRToSQL(AQPStmt &simplest_stmt, size_t query_id,
                            bool save_file, const std::string &sql_path) {
   IRToSQLConverter ir_to_sql_converter;
   std::string sql_code =

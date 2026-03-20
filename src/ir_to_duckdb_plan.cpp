@@ -298,7 +298,7 @@ IRToDuck::ConstructDuckdbProjection(
 }
 
 duckdb::unique_ptr<duckdb::Expression> IRToDuck::ConstructDuckdbExpression(
-    const std::unique_ptr<SimplestExpr> &simplest_expr) {
+    const std::unique_ptr<AQPExpr> &simplest_expr) {
   switch (simplest_expr->GetNodeType()) {
   case VarConstComparisonNode: {
     auto &comp = simplest_expr->Cast<SimplestVarConstComparison>();
@@ -492,7 +492,7 @@ duckdb::unique_ptr<duckdb::LogicalAggregate> IRToDuck::ConstructDuckdbAggregate(
 }
 
 duckdb::unique_ptr<duckdb::LogicalOperator> IRToDuck::ConstructDuckdbPlan(
-    const std::unique_ptr<SimplestStmt> &simplest_ir) {
+    const std::unique_ptr<AQPStmt> &simplest_ir) {
   // Recursively build children first (bottom-up)
   duckdb::unique_ptr<duckdb::LogicalOperator> left_child, right_child;
   if (!simplest_ir->children.empty()) {

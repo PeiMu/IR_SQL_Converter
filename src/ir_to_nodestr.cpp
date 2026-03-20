@@ -19,7 +19,7 @@ namespace ir_sql_converter {
 // Main Entry Point
 //===----------------------------------------------------------------------===//
 
-std::string IRToNodestr::NodeToString(const std::unique_ptr<SimplestStmt> &stmt) {
+std::string IRToNodestr::NodeToString(const std::unique_ptr<AQPStmt> &stmt) {
   output.str("");
   output.clear();
 
@@ -127,7 +127,7 @@ std::string IRToNodestr::EscapeString(const std::string &str) {
 // Write PostgreSQL PlannedStmt
 //===----------------------------------------------------------------------===//
 
-void IRToNodestr::WritePlannedStmt(const SimplestStmt &stmt) {
+void IRToNodestr::WritePlannedStmt(const AQPStmt &stmt) {
   WriteNodeStart("PLANNEDSTMT");
 
   // commandType: 1 = SELECT
@@ -202,7 +202,7 @@ void IRToNodestr::WritePlannedStmt(const SimplestStmt &stmt) {
 // Write Common Plan Fields
 //===----------------------------------------------------------------------===//
 
-void IRToNodestr::WriteCommonPlan(const SimplestStmt &stmt) {
+void IRToNodestr::WriteCommonPlan(const AQPStmt &stmt) {
   // startup_cost
   WriteFloat("startup_cost", 0.0f);
   // total_cost
@@ -267,7 +267,7 @@ void IRToNodestr::WriteCommonPlan(const SimplestStmt &stmt) {
 // Write Plan Nodes
 //===----------------------------------------------------------------------===//
 
-void IRToNodestr::WritePlanNode(const SimplestStmt &stmt) {
+void IRToNodestr::WritePlanNode(const AQPStmt &stmt) {
   switch (stmt.GetNodeType()) {
   case ScanNode:
     WriteSeqScan(stmt.Cast<SimplestScan>());
@@ -596,7 +596,7 @@ void IRToNodestr::WriteProjection(const SimplestProjection &proj) {
   WriteNodeEnd();
 }
 
-void IRToNodestr::WriteMaterial(const SimplestStmt &stmt) {
+void IRToNodestr::WriteMaterial(const AQPStmt &stmt) {
   WriteNodeStart("MATERIAL");
   WriteCommonPlan(stmt);
   WriteNodeEnd();
@@ -807,7 +807,7 @@ void IRToNodestr::WriteParam(const SimplestParam &param) {
 // Write Expressions
 //===----------------------------------------------------------------------===//
 
-void IRToNodestr::WriteOpExpr(const SimplestExpr &expr) {
+void IRToNodestr::WriteOpExpr(const AQPExpr &expr) {
   switch (expr.GetNodeType()) {
   case VarComparisonNode: {
     const auto &var_comp = expr.Cast<SimplestVarComparison>();
@@ -1144,7 +1144,7 @@ unsigned int IRToNodestr::GetPgAggFnOid(SimplestAggFnType type) {
 // Utility Functions
 //===----------------------------------------------------------------------===//
 
-void IRToNodestr::CollectTableIndices(const SimplestStmt *stmt,
+void IRToNodestr::CollectTableIndices(const AQPStmt *stmt,
                                       std::vector<unsigned int> &indices) {
   if (!stmt)
     return;
