@@ -89,7 +89,8 @@ enum SimplestNodeType {
   ScanNode,
   ChunkNode,
   HashNode,
-  SortNode
+  SortNode,
+  RawSQLNode
 };
 
 class AQPNode {
@@ -1459,4 +1460,27 @@ public:
 private:
   std::vector<SimplestOrderStruct> order_struct_vec;
 };
+// Holds a verbatim SQL fragment emitted as-is by ir_to_sql.cpp.
+// Used by TensorDagSplitter to wrap tensor op SQL templates so they pass
+// through the IR layer without requiring full expression tree construction.
+class SimplestRawSQL : public AQPStmt {
+public:
+  explicit SimplestRawSQL(std::string sql)
+      : AQPStmt(std::vector<std::unique_ptr<AQPStmt>>{}, RawSQLNode), raw_sql(std::move(sql)) {}
+
+  ~SimplestRawSQL() override = default;
+
+  const std::string &GetRawSQL() const { return raw_sql; }
+
+  std::string Print(bool print = true, int depth = 0) override {
+    std::string str = "RawSQL: " + raw_sql;
+    if (print)
+      std::cout << str << std::endl;
+    return str;
+  }
+
+private:
+  std::string raw_sql;
+};
+
 } // namespace ir_sql_converter

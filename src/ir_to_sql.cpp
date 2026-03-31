@@ -2,6 +2,9 @@
 
 namespace ir_sql_converter {
 std::string IRToSQLConverter::ConvertSimplestIRToSQL(AQPStmt &plan) {
+  if (plan.GetNodeType() == SimplestNodeType::RawSQLNode)
+    return plan.Cast<SimplestRawSQL>().GetRawSQL();
+
   std::string sql_code;
 #ifdef DEBUG
   assert(nullptr != plan);
