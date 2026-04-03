@@ -62,7 +62,9 @@ enum SimplestExprType {
   TextLike,
   Text_Not_Like,
   LogicalOp,
-  SingleAttr
+  SingleAttr,
+  InType,       // col IN (v1, v2, ...)
+  NotInType     // col NOT IN (v1, v2, ...)
 };
 enum SimplestNodeType {
   InvalidNodeType = 0,
@@ -78,6 +80,7 @@ enum SimplestNodeType {
   VarParamComparisonNode,
   LogicalExprNode,
   SingleAttrExprNode,
+  InExprNode,   // SimplestInExpr
   StmtNode,
   ProjectionNode,
   AggregateNode,
@@ -89,8 +92,7 @@ enum SimplestNodeType {
   ScanNode,
   ChunkNode,
   HashNode,
-  SortNode,
-  RawSQLNode
+  SortNode
 };
 
 class AQPNode {
@@ -773,6 +775,41 @@ public:
   }
 
   std::unique_ptr<SimplestAttr> attr;
+};
+
+// col IN (v1, v2, ...) or col NOT IN (v1, v2, ...)
+// Generated from COMPARE_IN / COMPARE_NOT_IN in the DuckDB plan path,
+// and from IN literal lists in the PostgreSQL parse-tree path.
+class SimplestInExpr : public AQPExpr {
+public:
+  SimplestInExpr(std::unique_ptr<SimplestAttr> attr_,
+                 std::vector<std::unique_ptr<SimplestConstVar>> values_,
+                 bool negated_ = false)
+      : AQPExpr(negated_ ? SimplestExprType::NotInType : SimplestExprType::InType,
+                InExprNode),
+        attr(std::move(attr_)),
+        values(std::move(values_)),
+        negated(negated_) {}
+
+  SimplestInExpr(const SimplestInExpr &) = delete;
+  SimplestInExpr &operator=(const SimplestInExpr &) = delete;
+  SimplestInExpr(SimplestInExpr &&) = default;
+  SimplestInExpr &operator=(SimplestInExpr &&) = default;
+  ~SimplestInExpr() override = default;
+
+  std::string Print(bool print = true, int depth = 0) override {
+    std::string s = negated ? "NOT IN: " : "IN: ";
+    s += attr->Print(false);
+    s += " IN [";
+    for (auto &v : values) { s += v->Print(false); s += ", "; }
+    s += "]";
+    if (print) std::cout << s << std::endl;
+    return s;
+  }
+
+  std::unique_ptr<SimplestAttr>                   attr;
+  std::vector<std::unique_ptr<SimplestConstVar>>  values;
+  bool                                            negated;
 };
 
 class AQPStmt : public AQPNode {
@@ -1460,6 +1497,7 @@ public:
 private:
   std::vector<SimplestOrderStruct> order_struct_vec;
 };
+
 // Holds a verbatim SQL fragment emitted as-is by ir_to_sql.cpp.
 // Used by TensorDagSplitter to wrap tensor op SQL templates so they pass
 // through the IR layer without requiring full expression tree construction.
