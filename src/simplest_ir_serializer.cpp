@@ -120,6 +120,9 @@ static void SerializeAttr(std::ostream &out, const SimplestAttr *attr) {
   out.write(reinterpret_cast<const char *>(&table_idx), sizeof(table_idx));
   out.write(reinterpret_cast<const char *>(&col_idx), sizeof(col_idx));
   WriteString(out, attr->GetColumnName());
+
+  uint8_t bw = attr->GetBitWidth();
+  out.write(reinterpret_cast<const char *>(&bw), sizeof(bw));
 }
 
 // Deserialize SimplestAttr
@@ -136,7 +139,10 @@ static std::unique_ptr<SimplestAttr> DeserializeAttr(std::istream &in) {
   in.read(reinterpret_cast<char *>(&col_idx), sizeof(col_idx));
   std::string col_name = ReadString(in);
 
-  return std::make_unique<SimplestAttr>(type, table_idx, col_idx, col_name);
+  uint8_t bw = 0;
+  in.read(reinterpret_cast<char *>(&bw), sizeof(bw));
+
+  return std::make_unique<SimplestAttr>(type, table_idx, col_idx, col_name, bw);
 }
 
 // Serialize AQPExpr
@@ -182,6 +188,34 @@ static void SerializeExpr(std::ostream &out, const AQPExpr *expr) {
   case SingleAttrExprNode: {
     auto &single_attr = expr->Cast<SimplestSingleAttrExpr>();
     SerializeAttr(out, single_attr.attr.get());
+    break;
+  }
+  case InExprNode: {
+    auto &in_expr = expr->Cast<SimplestInExpr>();
+    SerializeAttr(out, in_expr.attr.get());
+    bool neg = in_expr.negated;
+    out.write(reinterpret_cast<const char *>(&neg), sizeof(neg));
+    size_t nvals = in_expr.values.size();
+    out.write(reinterpret_cast<const char *>(&nvals), sizeof(nvals));
+    for (const auto &v : in_expr.values)
+      SerializeConstVar(out, v.get());
+    break;
+  }
+  case ArithExprNode: {
+    auto &arith = expr->Cast<SimplestArithExpr>();
+    SimplestArithOp op = arith.arith_op;
+    out.write(reinterpret_cast<const char *>(&op), sizeof(op));
+    SimplestVarType rt = arith.result_type;
+    out.write(reinterpret_cast<const char *>(&rt), sizeof(rt));
+    SerializeExpr(out, arith.left.get());
+    SerializeExpr(out, arith.right.get());
+    break;
+  }
+  case CastExprNode: {
+    auto &cast = expr->Cast<SimplestCastExpr>();
+    SimplestVarType tt = cast.target_type;
+    out.write(reinterpret_cast<const char *>(&tt), sizeof(tt));
+    SerializeExpr(out, cast.child.get());
     break;
   }
   default:
@@ -230,6 +264,34 @@ static std::unique_ptr<AQPExpr> DeserializeExpr(std::istream &in) {
   case SingleAttrExprNode: {
     auto attr = DeserializeAttr(in);
     return std::make_unique<SimplestSingleAttrExpr>(std::move(attr));
+  }
+  case InExprNode: {
+    auto attr = DeserializeAttr(in);
+    bool neg;
+    in.read(reinterpret_cast<char *>(&neg), sizeof(neg));
+    size_t nvals;
+    in.read(reinterpret_cast<char *>(&nvals), sizeof(nvals));
+    std::vector<std::unique_ptr<SimplestConstVar>> vals;
+    vals.reserve(nvals);
+    for (size_t i = 0; i < nvals; i++)
+      vals.push_back(DeserializeConstVar(in));
+    return std::make_unique<SimplestInExpr>(std::move(attr), std::move(vals), neg);
+  }
+  case ArithExprNode: {
+    SimplestArithOp op;
+    in.read(reinterpret_cast<char *>(&op), sizeof(op));
+    SimplestVarType rt;
+    in.read(reinterpret_cast<char *>(&rt), sizeof(rt));
+    auto left_expr = DeserializeExpr(in);
+    auto right_expr = DeserializeExpr(in);
+    return std::make_unique<SimplestArithExpr>(op, std::move(left_expr),
+                                               std::move(right_expr), rt);
+  }
+  case CastExprNode: {
+    SimplestVarType tt;
+    in.read(reinterpret_cast<char *>(&tt), sizeof(tt));
+    auto child_expr = DeserializeExpr(in);
+    return std::make_unique<SimplestCastExpr>(std::move(child_expr), tt);
   }
   default:
     throw std::runtime_error(

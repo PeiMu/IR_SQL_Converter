@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <cstdint>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -40,7 +41,8 @@ enum SimplestLogicalOp {
   LogicalNot
 };
 enum SimplestTextOrder { InvalidTextOrder = 0, DefaultTextOrder, UTF8, C };
-enum SimplestAggFnType { InvalidAggType = 0, Min, Max, Sum, Average };
+enum SimplestAggFnType { InvalidAggType = 0, Min, Max, Sum, Average, Count, CountStar };
+enum SimplestArithOp { ArithInvalid = 0, ArithAdd, ArithSub, ArithMul, ArithDiv, ArithMod };
 enum SimplestOrderType { INVALID = 0, ORDER_DEFAULT, Ascending, Descending };
 enum SimplestLimitType {
   UNSET = 0,
@@ -64,7 +66,9 @@ enum SimplestExprType {
   LogicalOp,
   SingleAttr,
   InType,       // col IN (v1, v2, ...)
-  NotInType     // col NOT IN (v1, v2, ...)
+  NotInType,    // col NOT IN (v1, v2, ...)
+  ArithOp,      // arithmetic expression (+, -, *, /, %)
+  CastOp        // type cast expression
 };
 enum SimplestNodeType {
   InvalidNodeType = 0,
@@ -81,6 +85,8 @@ enum SimplestNodeType {
   LogicalExprNode,
   SingleAttrExprNode,
   InExprNode,   // SimplestInExpr
+  ArithExprNode,  // SimplestArithExpr
+  CastExprNode,   // SimplestCastExpr
   StmtNode,
   ProjectionNode,
   AggregateNode,
@@ -92,7 +98,8 @@ enum SimplestNodeType {
   ScanNode,
   ChunkNode,
   HashNode,
-  SortNode
+  SortNode,
+  RawSQLNode
 };
 
 class AQPNode {
@@ -261,18 +268,21 @@ private:
 class SimplestAttr : public SimplestVar {
 public:
   SimplestAttr(SimplestVarType var_type, unsigned int table_index,
-               unsigned int column_index, std::string column_name)
+               unsigned int column_index, std::string column_name,
+               uint8_t bit_width = 0)
       : SimplestVar(var_type, false, AttrVarNode), table_index(table_index),
-        column_index(column_index), column_name(std::move(column_name)) {};
+        column_index(column_index), column_name(std::move(column_name)),
+        bit_width(bit_width) {};
 
   SimplestAttr(const SimplestAttr &other)
       : SimplestVar(other.GetType(), false, AttrVarNode),
         table_index(other.table_index), column_index(other.column_index),
-        column_name(other.column_name) {};
+        column_name(other.column_name), bit_width(other.bit_width) {};
 
   explicit SimplestAttr(std::unique_ptr<SimplestAttr> other)
       : SimplestVar(other->GetType(), false, AttrVarNode),
-        table_index(other->table_index), column_index(other->column_index) {};
+        table_index(other->table_index), column_index(other->column_index),
+        bit_width(other->bit_width) {};
 
   ~SimplestAttr() override = default;
 
@@ -285,6 +295,11 @@ public:
   void SetColumnName(std::string col_name) {
     column_name = std::move(col_name);
   }
+
+  // Bit-width for precise type info: 8/16/32/64 for IntVar, 32/64 for FloatVar.
+  // 0 means "unspecified, infer from context" (backward compatible).
+  uint8_t GetBitWidth() const { return bit_width; }
+  void SetBitWidth(uint8_t bw) { bit_width = bw; }
 
   std::string Print(bool print = true, int depth = 0) override {
     std::string str;
@@ -331,6 +346,7 @@ private:
   unsigned int table_index;
   unsigned int column_index;
   std::string column_name;
+  uint8_t bit_width = 0;  // 0 = infer; 8/16/32/64 for IntVar; 32/64 for FloatVar
 };
 
 struct SimplestAttrHasher {
@@ -812,6 +828,82 @@ public:
   bool                                            negated;
 };
 
+// Arithmetic expression: left OP right (e.g., price * (1 - discount))
+// Both children can be any AQPExpr (including nested ArithExpr, VarConst, etc.)
+class SimplestArithExpr : public AQPExpr {
+public:
+  SimplestArithExpr(SimplestArithOp op,
+                    std::unique_ptr<AQPExpr> left,
+                    std::unique_ptr<AQPExpr> right,
+                    SimplestVarType result_type = IntVar)
+      : AQPExpr(SimplestExprType::ArithOp, ArithExprNode),
+        arith_op(op), left(std::move(left)), right(std::move(right)),
+        result_type(result_type) {}
+
+  SimplestArithExpr(const SimplestArithExpr &) = delete;
+  SimplestArithExpr &operator=(const SimplestArithExpr &) = delete;
+  SimplestArithExpr(SimplestArithExpr &&) = default;
+  SimplestArithExpr &operator=(SimplestArithExpr &&) = default;
+  ~SimplestArithExpr() override = default;
+
+  std::string Print(bool print = true, int depth = 0) override {
+    std::string s = "(";
+    if (left) s += left->Print(false);
+    switch (arith_op) {
+    case ArithAdd: s += " + "; break;
+    case ArithSub: s += " - "; break;
+    case ArithMul: s += " * "; break;
+    case ArithDiv: s += " / "; break;
+    case ArithMod: s += " % "; break;
+    default:       s += " ?? "; break;
+    }
+    if (right) s += right->Print(false);
+    s += ")";
+    if (print) std::cout << s << std::endl;
+    return s;
+  }
+
+  SimplestArithOp arith_op;
+  std::unique_ptr<AQPExpr> left;
+  std::unique_ptr<AQPExpr> right;
+  SimplestVarType result_type;  // inferred output type
+};
+
+// Type cast expression: CAST(child AS target_type)
+class SimplestCastExpr : public AQPExpr {
+public:
+  SimplestCastExpr(std::unique_ptr<AQPExpr> child,
+                   SimplestVarType target_type)
+      : AQPExpr(SimplestExprType::CastOp, CastExprNode),
+        child(std::move(child)), target_type(target_type) {}
+
+  SimplestCastExpr(const SimplestCastExpr &) = delete;
+  SimplestCastExpr &operator=(const SimplestCastExpr &) = delete;
+  SimplestCastExpr(SimplestCastExpr &&) = default;
+  SimplestCastExpr &operator=(SimplestCastExpr &&) = default;
+  ~SimplestCastExpr() override = default;
+
+  std::string Print(bool print = true, int depth = 0) override {
+    std::string s = "CAST(";
+    if (child) s += child->Print(false);
+    s += " AS ";
+    switch (target_type) {
+    case BoolVar:   s += "BOOL"; break;
+    case IntVar:    s += "INT"; break;
+    case FloatVar:  s += "FLOAT"; break;
+    case StringVar: s += "VARCHAR"; break;
+    case Date:      s += "DATE"; break;
+    default:        s += "UNKNOWN"; break;
+    }
+    s += ")";
+    if (print) std::cout << s << std::endl;
+    return s;
+  }
+
+  std::unique_ptr<AQPExpr> child;
+  SimplestVarType target_type;
+};
+
 class AQPStmt : public AQPNode {
 public:
   AQPStmt(std::vector<std::unique_ptr<AQPStmt>> children,
@@ -988,8 +1080,17 @@ public:
       case SimplestAggFnType::Average:
         str += "avg(";
         break;
+      case SimplestAggFnType::Count:
+        str += "count(";
+        break;
+      case SimplestAggFnType::CountStar:
+        str += "count(";
+        break;
       }
-      str += agg_fn.first->Print(false);
+      if (agg_fn.second == SimplestAggFnType::CountStar)
+        str += "*";
+      else
+        str += agg_fn.first->Print(false);
       str += ")";
     }
     str += "]";
