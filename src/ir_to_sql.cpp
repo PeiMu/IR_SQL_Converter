@@ -31,20 +31,22 @@ std::string IRToSQLConverter::ConvertSimplestIRToSQL(AQPStmt &plan) {
   if (!table_names.empty())
     sql_code.erase(sql_code.size() - 2);
 
-  sql_code += "\nWHERE ";
-  for (const auto &filter : filter_field) {
-    sql_code += filter;
-    sql_code += " AND ";
-  }
-  if (!filter_field.empty() && join_field.empty())
-    sql_code.erase(sql_code.size() - 5);
+  if (!filter_field.empty() || !join_field.empty()) {
+    sql_code += "\nWHERE ";
+    for (const auto &filter : filter_field) {
+      sql_code += filter;
+      sql_code += " AND ";
+    }
+    if (!filter_field.empty() && join_field.empty())
+      sql_code.erase(sql_code.size() - 5);
 
-  for (const auto &join : join_field) {
-    sql_code += join;
-    sql_code += " AND ";
+    for (const auto &join : join_field) {
+      sql_code += join;
+      sql_code += " AND ";
+    }
+    if (!join_field.empty())
+      sql_code.erase(sql_code.size() - 5);
   }
-  if (!join_field.empty())
-    sql_code.erase(sql_code.size() - 5);
 
   if (!group_by_field.empty()) {
     sql_code += "\nGROUP BY\n";

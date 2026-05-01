@@ -86,9 +86,16 @@ std::unique_ptr<AQPStmt> DuckToIR::ConstructSimplestStmt(
     }
     case duckdb::LogicalOperatorType::LOGICAL_GET: {
       auto &get_op = duckdb_plan_pointer->Cast<duckdb::LogicalGet>();
-      auto simplest_scan = ConstructSimplestScan(get_op);
-      result =
-          unique_ptr_cast<SimplestScan, AQPStmt>(std::move(simplest_scan));
+      if (intermediate_table_map.count(get_op.table_index)) {
+        auto simplest_chunk =
+            ConstructSimplestChunkFromGet(get_op, intermediate_table_map);
+        result = unique_ptr_cast<SimplestChunk, AQPStmt>(
+            std::move(simplest_chunk));
+      } else {
+        auto simplest_scan = ConstructSimplestScan(get_op);
+        result =
+            unique_ptr_cast<SimplestScan, AQPStmt>(std::move(simplest_scan));
+      }
       break;
     }
     case duckdb::LogicalOperatorType::LOGICAL_CHUNK_GET: {
@@ -666,6 +673,49 @@ std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunkPlaceholder(
   }
 
   // Empty contents - data will be provided at execution time
+  std::vector<std::string> empty_contents;
+  std::vector<std::unique_ptr<AQPExpr>> qual_vec;
+
+  auto base_stmt = std::make_unique<AQPStmt>(
+      std::move(target_list), std::move(qual_vec), SimplestNodeType::ChunkNode);
+  auto simplest_chunk = std::make_unique<SimplestChunk>(
+      std::move(base_stmt), table_index, empty_contents);
+  if (!chunk_name.empty()) {
+    simplest_chunk->SetChunkName(chunk_name);
+  }
+  simplest_chunk->SetEstimatedCardinality(estimated_card);
+  return simplest_chunk;
+}
+
+std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunkFromGet(
+    duckdb::LogicalGet &get_op,
+    const std::unordered_map<unsigned int, std::string>
+        &intermediate_table_map) {
+  auto table_index = get_op.table_index;
+  std::string chunk_name;
+  auto it = intermediate_table_map.find(table_index);
+  if (it != intermediate_table_map.end()) {
+    chunk_name = it->second;
+  }
+  uint64_t estimated_card = get_op.EstimateCardinality(context);
+
+  auto &column_ids = compat::GetLogicalGetColumnIds(get_op);
+  table_column_ids_map[table_index] = column_ids;
+
+  std::vector<std::unique_ptr<SimplestAttr>> target_list;
+  for (size_t binding_idx = 0; binding_idx < column_ids.size(); binding_idx++) {
+    auto actual_col_id = ResolveDuckDBColumnIndex(table_index, binding_idx);
+    auto col_name =
+        ResolveColumnName(table_index, actual_col_id,
+                          actual_col_id < get_op.names.size()
+                              ? get_op.names[actual_col_id]
+                              : "col" + std::to_string(actual_col_id));
+    auto simplest_attr = std::make_unique<SimplestAttr>(
+        ConvertVarType(get_op.returned_types[actual_col_id]), table_index,
+        actual_col_id, col_name);
+    target_list.emplace_back(std::move(simplest_attr));
+  }
+
   std::vector<std::string> empty_contents;
   std::vector<std::unique_ptr<AQPExpr>> qual_vec;
 

@@ -83,6 +83,12 @@ private:
       duckdb::LogicalColumnDataGet &column_data_get_op,
       const std::unordered_map<unsigned int, std::string>
           &intermediate_table_map);
+  // Create SimplestChunk from a LogicalGet that references a temp table
+  // via the replacement scan (used after ReOptimizeIR re-parses SQL).
+  std::unique_ptr<SimplestChunk> ConstructSimplestChunkFromGet(
+      duckdb::LogicalGet &get_op,
+      const std::unordered_map<unsigned int, std::string>
+          &intermediate_table_map);
   std::unique_ptr<SimplestCrossProduct>
   ConstructSimplestCrossProduct(duckdb::LogicalCrossProduct &cross_product_op,
                                 std::unique_ptr<AQPStmt> left_child,
