@@ -102,11 +102,30 @@ MakeLogicalGet(duckdb::idx_t table_index, duckdb::TableFunction function,
 //=============================================================================
 #if DUCKDB_VERSION_MAJOR >= 1
 
-// v1.3.2: Returns InsertionOrderPreservingMap<string>
+// v1.x: Returns InsertionOrderPreservingMap<string>
+// NOTE: In DuckDB >= v1.5.2, ParamsToString()["Table"] returns a fully
+// qualified name like "imdb.main.person_info" instead of just "person_info".
+// Reserved keywords like "name" are additionally wrapped in double quotes.
+// Strip quotes and catalog.schema. prefix to get the plain table name.
+inline std::string StripTableName(const std::string &qualified) {
+  std::string result = qualified;
+  // Strip catalog.schema. prefix first (e.g. "imdb.main."name"" -> ""name"")
+  auto dot = result.rfind('.');
+  if (dot != std::string::npos) {
+    result = result.substr(dot + 1);
+  }
+  // Strip surrounding double quotes (added by KeywordHelper::WriteOptionallyQuoted
+  // for SQL reserved keywords like "name")
+  if (result.size() >= 2 && result.front() == '"' && result.back() == '"') {
+    result = result.substr(1, result.size() - 2);
+  }
+  return result;
+}
+
 inline std::string
 GetTableNameFromLogicalGet(const duckdb::LogicalGet &get_op) {
   auto table_name = get_op.ParamsToString();
-  return table_name["Table"];
+  return StripTableName(table_name["Table"]);
 }
 
 #else // v0.10.1
