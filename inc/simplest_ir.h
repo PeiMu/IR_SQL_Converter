@@ -1274,6 +1274,13 @@ public:
   unsigned int GetMarkIndex() const { return mark_index; }
   void SetMarkIndex(unsigned int idx) { mark_index = idx; }
 
+  // Hash-join build side as chosen by the engine's physical planner:
+  // 0/1 = index into children, -1 = unknown (annotation failed or not run).
+  // The IR itself only records logical left/right; physical planning may
+  // flip sides, so consumers that build their own hash tables must use this.
+  int GetBuildChild() const { return build_child; }
+  void SetBuildChild(int child_idx) { build_child = child_idx; }
+
   std::string Print(bool print = true, int depth = 0) override {
     std::string str;
 
@@ -1336,6 +1343,7 @@ public:
 private:
   SimplestJoinType join_type;
   unsigned int mark_index{};
+  int build_child{-1};
 };
 
 class SimplestCrossProduct : public AQPStmt {
