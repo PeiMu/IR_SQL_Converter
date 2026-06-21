@@ -2,16 +2,25 @@
 
 #include "duckdb.hpp"
 
-// Detect DuckDB version - check for features unique to 1.3.2
-// ColumnIndex struct exists in 1.3.2 but not in 0.10.1
+// Detect DuckDB version via compile-time feature probing.
+// ColumnIndex struct exists in 1.3.2+ but not in 0.10.1.
+// ExtensionManager header exists in 1.5.2+ but not in 1.3.2.
 #if __has_include("duckdb/common/column_index.hpp")
 #define DUCKDB_VERSION_MAJOR 1
-#define DUCKDB_VERSION_MINOR 3
 #include "duckdb/common/column_index.hpp"
+#if __has_include("duckdb/main/extension_manager.hpp")
+#define DUCKDB_VERSION_MINOR 5
+#else
+#define DUCKDB_VERSION_MINOR 3
+#endif
 #else
 #define DUCKDB_VERSION_MAJOR 0
 #define DUCKDB_VERSION_MINOR 10
 #endif
+
+#define DUCKDB_VERSION_AT_LEAST(maj, min) \
+  ((DUCKDB_VERSION_MAJOR > (maj)) ||      \
+   (DUCKDB_VERSION_MAJOR == (maj) && DUCKDB_VERSION_MINOR >= (min)))
 
 namespace ir_sql_converter {
 namespace compat {
