@@ -527,6 +527,7 @@ DuckToIR::ConstructSimplestScan(duckdb::LogicalGet &get_op) {
 
   // Store column_ids and column names mapping for this table
   table_column_ids_map[table_index] = compat::GetLogicalGetColumnIds(get_op);
+  table_column_names_map_[table_index] = get_op.names;
 
   // add target list
   std::vector<std::unique_ptr<SimplestAttr>> target_list;

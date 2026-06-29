@@ -128,18 +128,28 @@ private:
                     std::unique_ptr<SimplestAttr> var_attr);
 
   // Resolve column name: use chunk_col_names_ for CHUNK_GET tables,
-  // fall back to alias for regular scan tables.
+  // table_column_names_map_ for regular tables, fall back to alias.
   std::string ResolveColumnName(duckdb::idx_t table_idx,
                                 duckdb::column_t actual_col_idx,
                                 const std::string &alias) {
-    if (chunk_col_names_ == nullptr)
-      return alias;
-    auto it = chunk_col_names_->find(static_cast<unsigned int>(table_idx));
-    if (it == chunk_col_names_->end())
-      return alias;
-    const auto &names = it->second;
-    if (actual_col_idx < static_cast<duckdb::column_t>(names.size()))
-      return names[actual_col_idx];
+    // CHUNK_GET tables: use external chunk_col_names_ map
+    if (chunk_col_names_) {
+      auto it = chunk_col_names_->find(static_cast<unsigned int>(table_idx));
+      if (it != chunk_col_names_->end()) {
+        const auto &names = it->second;
+        if (actual_col_idx < static_cast<duckdb::column_t>(names.size()))
+          return names[actual_col_idx];
+      }
+    }
+    // Regular tables: use names collected from LogicalGet during tree walk
+    {
+      auto it = table_column_names_map_.find(table_idx);
+      if (it != table_column_names_map_.end()) {
+        const auto &names = it->second;
+        if (actual_col_idx < static_cast<duckdb::column_t>(names.size()))
+          return names[actual_col_idx];
+      }
+    }
     return alias;
   }
 
@@ -149,6 +159,10 @@ private:
   // <table id, column binding mapping: binding id -> actual id>
   std::unordered_map<duckdb::idx_t, compat::column_ids_vector_t>
       table_column_ids_map;
+
+  // <table id, column names from LogicalGet::names>
+  std::unordered_map<duckdb::idx_t, duckdb::vector<std::string>>
+      table_column_names_map_;
 
   // Pointer to chunk table column names (set from ConvertDuckDBPlanToIR).
   // Maps data_chunk_index → ordered column names as stored in the temp table.
