@@ -1,4 +1,5 @@
 #include "parsetree_to_ir.h"
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 
@@ -645,9 +646,33 @@ ParseTreeToIR::ConvertAConst(const json &a_const) {
 SimplestVarType
 ParseTreeToIR::GetVarTypeFromColumn(const std::string &table_name,
                                     const std::string &column_name) {
-  // Without schema information, we can't determine the exact type
-  // Default to StringVar (you can enhance this with a schema lookup)
-  // TODO: Query database metadata to get actual column types
+  if (!schema_parser_)
+    return SimplestVarType::StringVar;
+  const auto *schema = schema_parser_->GetTableSchema(table_name);
+  if (!schema)
+    return SimplestVarType::StringVar;
+  std::string col_lower = column_name;
+  std::transform(col_lower.begin(), col_lower.end(), col_lower.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  auto it = schema->column_name_to_index.find(col_lower);
+  if (it == schema->column_name_to_index.end())
+    return SimplestVarType::StringVar;
+  const std::string &type_str = schema->columns[it->second].type;
+  std::string upper = type_str;
+  std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+  auto paren = upper.find('(');
+  if (paren != std::string::npos)
+    upper = upper.substr(0, paren);
+  while (!upper.empty() && upper.back() == ' ')
+    upper.pop_back();
+  if (upper == "INTEGER" || upper == "INT" || upper == "BIGINT" ||
+      upper == "SMALLINT" || upper == "TINYINT" || upper == "INT4" ||
+      upper == "INT8" || upper == "INT2" || upper == "SERIAL" ||
+      upper == "DATE")
+    return SimplestVarType::IntVar;
+  if (upper == "FLOAT" || upper == "DOUBLE" || upper == "REAL" ||
+      upper == "DOUBLE PRECISION" || upper == "NUMERIC" || upper == "DECIMAL")
+    return SimplestVarType::FloatVar;
   return SimplestVarType::StringVar;
 }
 
