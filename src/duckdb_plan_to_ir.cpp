@@ -3,6 +3,31 @@
 #include <utility>
 
 namespace ir_sql_converter {
+
+static const duckdb::Expression *
+UnwrapToColumnRef(const duckdb::Expression *e) {
+  for (;;) {
+    if (e->expression_class == duckdb::ExpressionClass::BOUND_COLUMN_REF)
+      return e;
+    if (e->expression_class == duckdb::ExpressionClass::BOUND_CAST) {
+      e = e->Cast<duckdb::BoundCastExpression>().child.get();
+      continue;
+    }
+    if (e->expression_class == duckdb::ExpressionClass::BOUND_FUNCTION) {
+      auto &fn = e->Cast<duckdb::BoundFunctionExpression>();
+      if (!fn.children.empty() &&
+          fn.children[0]->expression_class ==
+              duckdb::ExpressionClass::BOUND_COLUMN_REF) {
+        return fn.children[0].get();
+      }
+      if (!fn.children.empty()) {
+        e = fn.children[0].get();
+        continue;
+      }
+    }
+    return e;
+  }
+}
 std::unique_ptr<AQPStmt> DuckToIR::ConstructSimplestStmt(
     duckdb::LogicalOperator *duckdb_plan_pointer,
     const std::unordered_map<unsigned int, std::string> &intermediate_table_map,
@@ -126,9 +151,6 @@ std::unique_ptr<AQPStmt> DuckToIR::ConstructSimplestStmt(
               std::move(simplest_chunk));
         }
       } else {
-#ifndef NDEBUG
-        std::cout << "embed data\n";
-#endif
         // IN-clause constant list - always embed data
         auto simplest_chunk =
             ConstructSimplestChunk(column_data_get_op, intermediate_table_map);
@@ -178,10 +200,10 @@ DuckToIR::ConstructSimplestProj(duckdb::LogicalProjection &proj_op,
 
   std::vector<std::unique_ptr<SimplestAttr>> target_list;
   for (const auto &expr : proj_op.expressions) {
-#ifdef DEBUG
-    D_ASSERT(ExpressionType::BOUND_COLUMN_REF == expr->type);
-#endif
-    auto &column_ref_expr = expr->Cast<duckdb::BoundColumnRefExpression>();
+    auto *col_expr = UnwrapToColumnRef(expr.get());
+    D_ASSERT(col_expr->expression_class ==
+             duckdb::ExpressionClass::BOUND_COLUMN_REF);
+    auto &column_ref_expr = col_expr->Cast<duckdb::BoundColumnRefExpression>();
     // Resolve binding index to actual column index
     auto actual_column_idx =
         ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
@@ -196,6 +218,14 @@ DuckToIR::ConstructSimplestProj(duckdb::LogicalProjection &proj_op,
         actual_column_name);
     target_list.emplace_back(std::move(simplest_target));
   }
+  // Register the projection's output bindings so parent joins can resolve
+  // column references through this projection's table_index.
+  compat::column_ids_vector_t proj_ids;
+  for (duckdb::idx_t i = 0; i < proj_op.expressions.size(); i++) {
+    proj_ids.push_back(compat::MakeColumnIndex(i));
+  }
+  table_column_ids_map[table_index] = std::move(proj_ids);
+
   auto base_stmt = std::make_unique<AQPStmt>(
       std::move(children), std::move(target_list),
       SimplestNodeType::ProjectionNode);
@@ -232,11 +262,11 @@ DuckToIR::ConstructSimplestAggGroup(duckdb::LogicalAggregate &agg_group_op,
   table_column_ids_map[agg_group_op.aggregate_index] = agg_ids;
 
   for (const auto &group_expr : agg_group_op.groups) {
-#ifdef DEBUG
-    D_ASSERT(ExpressionType::BOUND_COLUMN_REF == group_expr->type);
-#endif
+    auto *grp_col = UnwrapToColumnRef(group_expr.get());
+    D_ASSERT(grp_col->expression_class ==
+             duckdb::ExpressionClass::BOUND_COLUMN_REF);
     auto &column_ref_expr =
-        group_expr->Cast<duckdb::BoundColumnRefExpression>();
+        grp_col->Cast<duckdb::BoundColumnRefExpression>();
     auto actual_col_idx =
         ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
                                  column_ref_expr.binding.column_index);
@@ -262,10 +292,10 @@ DuckToIR::ConstructSimplestAggGroup(duckdb::LogicalAggregate &agg_group_op,
     auto &aggregate_expr = agg_expr->Cast<duckdb::BoundAggregateExpression>();
     std::string agg_fn_type = aggregate_expr.function.name;
     for (const auto &expr : aggregate_expr.children) {
-#ifdef DEBUG
-      D_ASSERT(ExpressionType::BOUND_COLUMN_REF == expr->type);
-#endif
-      auto &column_ref_expr = expr->Cast<duckdb::BoundColumnRefExpression>();
+      auto *agg_col = UnwrapToColumnRef(expr.get());
+      D_ASSERT(agg_col->expression_class ==
+               duckdb::ExpressionClass::BOUND_COLUMN_REF);
+      auto &column_ref_expr = agg_col->Cast<duckdb::BoundColumnRefExpression>();
       auto actual_col_idx =
           ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
                                    column_ref_expr.binding.column_index);
@@ -309,11 +339,11 @@ DuckToIR::ConstructSimplestOrderBy(duckdb::LogicalOrder &order_op,
   std::unique_ptr<SimplestAttr> simplest_attr;
   for (auto &order : order_op.orders) {
     order_struct.order_type = ConvertOrderType(order.type);
-#ifdef DEBUG
-    D_ASSERT(order.expression->type == ExpressionType::BOUND_COLUMN_REF);
-#endif
+    auto *ord_col = UnwrapToColumnRef(order.expression.get());
+    D_ASSERT(ord_col->expression_class ==
+             duckdb::ExpressionClass::BOUND_COLUMN_REF);
     auto &column_ref_expr =
-        order.expression->Cast<duckdb::BoundColumnRefExpression>();
+        ord_col->Cast<duckdb::BoundColumnRefExpression>();
     auto actual_col_idx =
         ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
                                  column_ref_expr.binding.column_index);
@@ -443,11 +473,11 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
     auto comp_type = ConvertCompType(cond.comparison);
     const auto &left_cond = cond.left;
     auto left_type = ConvertVarType(left_cond->return_type);
-#ifdef DEBUG
-    D_ASSERT(ExpressionType::BOUND_COLUMN_REF == left_cond->type);
-#endif
+    auto *left_col_expr = UnwrapToColumnRef(left_cond.get());
+    D_ASSERT(left_col_expr->expression_class ==
+             duckdb::ExpressionClass::BOUND_COLUMN_REF);
     auto &column_ref_left_cond =
-        left_cond->Cast<duckdb::BoundColumnRefExpression>();
+        left_col_expr->Cast<duckdb::BoundColumnRefExpression>();
     // Resolve binding index to actual column index
     auto left_actual_col_idx =
         ResolveDuckDBColumnIndex(column_ref_left_cond.binding.table_index,
@@ -461,11 +491,11 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
         left_actual_col_idx, left_actual_col_name);
     const auto &right_cond = cond.right;
     auto right_type = ConvertVarType(right_cond->return_type);
-#ifdef DEBUG
-    D_ASSERT(ExpressionType::BOUND_COLUMN_REF == right_cond->type);
-#endif
+    auto *right_col_expr = UnwrapToColumnRef(right_cond.get());
+    D_ASSERT(right_col_expr->expression_class ==
+             duckdb::ExpressionClass::BOUND_COLUMN_REF);
     auto &column_ref_right_cond =
-        right_cond->Cast<duckdb::BoundColumnRefExpression>();
+        right_col_expr->Cast<duckdb::BoundColumnRefExpression>();
     // Resolve binding index to actual column index
     auto right_actual_col_idx =
         ResolveDuckDBColumnIndex(column_ref_right_cond.binding.table_index,
@@ -836,10 +866,10 @@ duckdb::column_t DuckToIR::ResolveDuckDBColumnIndex(duckdb::idx_t table_idx,
 
 std::unique_ptr<SimplestAttr>
 DuckToIR::ConvertAttr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
-#ifdef DEBUG
-  D_ASSERT(ExpressionType::BOUND_COLUMN_REF == expr->type);
-#endif
-  auto &column_ref_expr = expr->Cast<duckdb::BoundColumnRefExpression>();
+  auto *col_expr = UnwrapToColumnRef(expr.get());
+  D_ASSERT(col_expr->expression_class ==
+           duckdb::ExpressionClass::BOUND_COLUMN_REF);
+  auto &column_ref_expr = col_expr->Cast<duckdb::BoundColumnRefExpression>();
   // Resolve binding index to actual column index using column_ids mapping
   auto actual_column_idx =
       ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
