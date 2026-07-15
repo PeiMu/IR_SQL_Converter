@@ -417,6 +417,14 @@ IRToDuck::ConstructDuckdbConstant(
   case BoolVar:
     value = duckdb::Value::BOOLEAN(simplest_const->GetBoolValue());
     break;
+  case TimestampVar:
+    value = duckdb::Value(simplest_const->GetStringValue())
+                .DefaultCastAs(duckdb::LogicalType::TIMESTAMP);
+    break;
+  case IntervalVar:
+    value = duckdb::Value(simplest_const->GetStringValue())
+                .DefaultCastAs(duckdb::LogicalType::INTERVAL);
+    break;
   default:
     throw std::runtime_error("Unsupported constant type");
   }
@@ -445,33 +453,38 @@ duckdb::unique_ptr<duckdb::LogicalAggregate> IRToDuck::ConstructDuckdbAggregate(
   for (const auto &agg_fn : simplest_agg.agg_fns) {
     std::string agg_fn_name = ConvertAggFnType(agg_fn.second);
 
-    // First create column ref to get the argument type
-    auto col_ref = ConstructDuckdbColumnRef(agg_fn.first);
-    duckdb::vector<duckdb::LogicalType> arg_types;
-    arg_types.push_back(col_ref->return_type);
-
-    // Get aggregate function from catalog
     auto &catalog = duckdb::Catalog::GetSystemCatalog(context);
     auto &func_catalog =
         catalog.GetEntry<duckdb::AggregateFunctionCatalogEntry>(context, "", "",
                                                                 agg_fn_name);
 
-    // Find the function overload that matches the argument types
-    auto matched_func =
-        func_catalog.functions.GetFunctionByArguments(context, arg_types);
+    if (agg_fn.second == ir_sql_converter::SimplestAggFnType::CountStar) {
+      duckdb::vector<duckdb::LogicalType> arg_types;
+      auto matched_func =
+          func_catalog.functions.GetFunctionByArguments(context, arg_types);
+      duckdb::vector<duckdb::unique_ptr<duckdb::Expression>> children;
+      duckdb::FunctionBinder function_binder(context);
+      auto agg_expr = function_binder.BindAggregateFunction(
+          matched_func, std::move(children), nullptr,
+          duckdb::AggregateType::NON_DISTINCT);
+      agg_expressions.push_back(std::move(agg_expr));
+    } else {
+      auto col_ref = ConstructDuckdbColumnRef(agg_fn.first);
+      duckdb::vector<duckdb::LogicalType> arg_types;
+      arg_types.push_back(col_ref->return_type);
 
-    // Create children vector with the column ref
-    duckdb::vector<duckdb::unique_ptr<duckdb::Expression>> children;
-    children.push_back(std::move(col_ref));
+      auto matched_func =
+          func_catalog.functions.GetFunctionByArguments(context, arg_types);
 
-    // Use FunctionBinder to properly bind the aggregate function
-    // This handles setting return_type correctly for polymorphic functions
-    duckdb::FunctionBinder function_binder(context);
-    auto agg_expr = function_binder.BindAggregateFunction(
-        matched_func, std::move(children), nullptr,
-        duckdb::AggregateType::NON_DISTINCT);
+      duckdb::vector<duckdb::unique_ptr<duckdb::Expression>> children;
+      children.push_back(std::move(col_ref));
 
-    agg_expressions.push_back(std::move(agg_expr));
+      duckdb::FunctionBinder function_binder(context);
+      auto agg_expr = function_binder.BindAggregateFunction(
+          matched_func, std::move(children), nullptr,
+          duckdb::AggregateType::NON_DISTINCT);
+      agg_expressions.push_back(std::move(agg_expr));
+    }
   }
 
   // Create LogicalAggregate
@@ -583,6 +596,12 @@ duckdb::LogicalType IRToDuck::ConvertVarType(SimplestVarType type) {
     return duckdb::LogicalType(duckdb::LogicalTypeId::FLOAT);
   case StringVar:
     return duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
+  case Date:
+    return duckdb::LogicalType(duckdb::LogicalTypeId::DATE);
+  case TimestampVar:
+    return duckdb::LogicalType(duckdb::LogicalTypeId::TIMESTAMP);
+  case IntervalVar:
+    return duckdb::LogicalType(duckdb::LogicalTypeId::INTERVAL);
   default:
     std::cout << "Invalid postgres var type!" << std::endl;
     return duckdb::LogicalType(duckdb::LogicalTypeId::INVALID);
@@ -599,6 +618,10 @@ std::string IRToDuck::ConvertAggFnType(SimplestAggFnType type) {
     return "sum";
   case SimplestAggFnType::Average:
     return "avg";
+  case SimplestAggFnType::Count:
+    return "count";
+  case SimplestAggFnType::CountStar:
+    return "count_star";
   default:
     throw std::runtime_error("Unsupported SimplestAggFnType");
   }

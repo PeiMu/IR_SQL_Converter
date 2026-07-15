@@ -20,7 +20,9 @@ enum SimplestVarType {
   FloatVar,
   StringVar,
   StringVarArr,
-  Date
+  Date,
+  IntervalVar,
+  TimestampVar
 };
 enum SimplestJoinType {
   InvalidJoinType = 0,
@@ -68,7 +70,8 @@ enum SimplestExprType {
   InType,       // col IN (v1, v2, ...)
   NotInType,    // col NOT IN (v1, v2, ...)
   ArithOp,      // arithmetic expression (+, -, *, /, %)
-  CastOp        // type cast expression
+  CastOp,       // type cast expression
+  FunctionExpr  // generic function call: fn_name(arg1, arg2, ...)
 };
 enum SimplestNodeType {
   InvalidNodeType = 0,
@@ -99,7 +102,8 @@ enum SimplestNodeType {
   ChunkNode,
   HashNode,
   SortNode,
-  RawSQLNode
+  RawSQLNode,
+  FunctionExprNodeType
 };
 
 class AQPNode {
@@ -904,6 +908,100 @@ public:
   SimplestVarType target_type;
 };
 
+// Generic function call expression: fn_name(arg1, arg2, ...)
+class SimplestFunctionExpr : public AQPExpr {
+public:
+  SimplestFunctionExpr(std::string fn_name,
+                       std::vector<std::unique_ptr<AQPExpr>> args)
+      : AQPExpr(SimplestExprType::FunctionExpr, FunctionExprNodeType),
+        fn_name(std::move(fn_name)), args(std::move(args)) {}
+
+  SimplestFunctionExpr(const SimplestFunctionExpr &) = delete;
+  SimplestFunctionExpr &operator=(const SimplestFunctionExpr &) = delete;
+  SimplestFunctionExpr(SimplestFunctionExpr &&) = default;
+  SimplestFunctionExpr &operator=(SimplestFunctionExpr &&) = default;
+  ~SimplestFunctionExpr() override = default;
+
+  std::string Print(bool print = true, int depth = 0) override {
+    std::string s = fn_name + "(";
+    for (size_t i = 0; i < args.size(); i++) {
+      if (i > 0)
+        s += ", ";
+      if (args[i])
+        s += args[i]->Print(false);
+    }
+    s += ")";
+    if (print)
+      std::cout << s << std::endl;
+    return s;
+  }
+
+  std::string fn_name;
+  std::vector<std::unique_ptr<AQPExpr>> args;
+};
+
+// Wraps a SimplestConstVar so it can appear as an AQPExpr child
+// (e.g., inside SimplestArithExpr for "col - INTERVAL '120 days'").
+class SimplestConstExpr : public AQPExpr {
+public:
+  explicit SimplestConstExpr(std::unique_ptr<SimplestConstVar> value_)
+      : AQPExpr(SimplestExprType::SingleAttr, ConstVarNode),
+        value(std::move(value_)) {}
+
+  SimplestConstExpr(const SimplestConstExpr &) = delete;
+  SimplestConstExpr &operator=(const SimplestConstExpr &) = delete;
+  SimplestConstExpr(SimplestConstExpr &&) = default;
+  SimplestConstExpr &operator=(SimplestConstExpr &&) = default;
+  ~SimplestConstExpr() override = default;
+
+  std::string Print(bool print = true, int depth = 0) override {
+    std::string s = value ? value->Print(false) : "NULL";
+    if (print) std::cout << s << std::endl;
+    return s;
+  }
+
+  std::unique_ptr<SimplestConstVar> value;
+};
+
+// General comparison: left_expr COMP_OP right_expr where both sides
+// can be arbitrary expression trees (columns, arithmetic, casts, etc.).
+class SimplestGeneralComparison : public AQPExpr {
+public:
+  SimplestGeneralComparison(SimplestExprType comparison_type,
+                            std::unique_ptr<AQPExpr> left_expr_,
+                            std::unique_ptr<AQPExpr> right_expr_)
+      : AQPExpr(comparison_type, ExprNode),
+        left_expr(std::move(left_expr_)),
+        right_expr(std::move(right_expr_)) {}
+
+  SimplestGeneralComparison(const SimplestGeneralComparison &) = delete;
+  SimplestGeneralComparison &operator=(const SimplestGeneralComparison &) = delete;
+  SimplestGeneralComparison(SimplestGeneralComparison &&) = default;
+  SimplestGeneralComparison &operator=(SimplestGeneralComparison &&) = default;
+  ~SimplestGeneralComparison() override = default;
+
+  std::string Print(bool print = true, int depth = 0) override {
+    std::string s = "(";
+    if (left_expr) s += left_expr->Print(false);
+    switch (GetSimplestExprType()) {
+    case Equal:        s += " = "; break;
+    case NotEqual:     s += " != "; break;
+    case LessThan:     s += " < "; break;
+    case LessEqual:    s += " <= "; break;
+    case GreaterThan:  s += " > "; break;
+    case GreaterEqual: s += " >= "; break;
+    default:           s += " ?? "; break;
+    }
+    if (right_expr) s += right_expr->Print(false);
+    s += ")";
+    if (print) std::cout << s << std::endl;
+    return s;
+  }
+
+  std::unique_ptr<AQPExpr> left_expr;
+  std::unique_ptr<AQPExpr> right_expr;
+};
+
 class AQPStmt : public AQPNode {
 public:
   AQPStmt(std::vector<std::unique_ptr<AQPStmt>> children,
@@ -931,6 +1029,7 @@ public:
 
   AQPStmt(std::unique_ptr<AQPStmt> stmt, SimplestNodeType node_type)
       : AQPNode(node_type), target_list(std::move(stmt->target_list)),
+        expr_target_list(std::move(stmt->expr_target_list)),
         children(std::move(stmt->children)),
         qual_vec(std::move(stmt->qual_vec)),
         estimated_cardinality(stmt->estimated_cardinality) {};
@@ -973,6 +1072,11 @@ public:
   };
 
   std::vector<std::unique_ptr<SimplestAttr>> target_list;
+
+  // Parallel to target_list: when target_list[i] is a placeholder for a
+  // function expression, expr_target_list[i] holds the real AQPExpr.
+  // Empty or nullptr at index i means target_list[i] is the true column ref.
+  std::vector<std::unique_ptr<AQPExpr>> expr_target_list;
 
   // children[0] is the left node, children[1] is the right node
   std::vector<std::unique_ptr<AQPStmt>> children;

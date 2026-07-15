@@ -120,6 +120,8 @@ private:
                   const std::string &appendix = "");
   std::unique_ptr<AQPExpr>
   ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr);
+  std::unique_ptr<AQPExpr>
+  ConvertExprToAQPExpr(const duckdb::Expression *expr);
 
   std::vector<std::unique_ptr<AQPExpr>> CollectQualVecExprs(
       const duckdb::vector<duckdb::unique_ptr<duckdb::Expression>> &exprs);

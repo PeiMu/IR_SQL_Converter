@@ -1,6 +1,7 @@
 #pragma once
 
 #include <unordered_map>
+#include <unordered_set>
 
 #include "simplest_ir.h"
 
@@ -40,6 +41,11 @@ private:
   std::unordered_map<unsigned int, std::string> agg_field;
   std::vector<std::string> filter_field;
   std::vector<std::string> join_field;
+  // LEFT/RIGHT JOIN clauses rendered as "LEFT JOIN table AS alias ON cond"
+  std::vector<std::string> outer_join_clauses;
+  // Table indices that appear as the right side of an outer join (excluded from
+  // the comma-separated FROM list since they're part of the JOIN clause).
+  std::unordered_set<unsigned int> outer_join_tables;
   std::vector<std::unique_ptr<SimplestAttr>> group_by_vec;
   std::vector<std::string> group_by_field;
   std::vector<std::string> order_by_field;

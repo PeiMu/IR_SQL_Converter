@@ -1,32 +1,47 @@
 #include "duckdb_plan_to_ir.h"
 
+#include <limits>
+#include <stdexcept>
 #include <utility>
 
 namespace ir_sql_converter {
 
+// Unwrap casts and DuckDB Compressed-Materialization wrappers around a column
+// reference; nullptr when the expression is anything else.
+// __internal_compress_* functions are storage-layer wrappers inserted by
+// DuckDB's CompressedMaterialization optimizer — the first child is always the
+// original column reference and unwrapping is semantically safe.
 static const duckdb::Expression *
-UnwrapToColumnRef(const duckdb::Expression *e) {
+TryUnwrapCastToColumnRef(const duckdb::Expression *e) {
   for (;;) {
-    if (e->expression_class == duckdb::ExpressionClass::BOUND_COLUMN_REF)
-      return e;
     if (e->expression_class == duckdb::ExpressionClass::BOUND_CAST) {
       e = e->Cast<duckdb::BoundCastExpression>().child.get();
       continue;
     }
     if (e->expression_class == duckdb::ExpressionClass::BOUND_FUNCTION) {
       auto &fn = e->Cast<duckdb::BoundFunctionExpression>();
-      if (!fn.children.empty() &&
-          fn.children[0]->expression_class ==
-              duckdb::ExpressionClass::BOUND_COLUMN_REF) {
-        return fn.children[0].get();
-      }
-      if (!fn.children.empty()) {
+      if (fn.function.name.rfind("__internal_compress_", 0) == 0 &&
+          !fn.children.empty()) {
         e = fn.children[0].get();
         continue;
       }
     }
-    return e;
+    break;
   }
+  return e->expression_class == duckdb::ExpressionClass::BOUND_COLUMN_REF
+             ? e
+             : nullptr;
+}
+
+static const duckdb::Expression *
+UnwrapToColumnRef(const duckdb::Expression *e) {
+  auto *col = TryUnwrapCastToColumnRef(e);
+  if (!col) {
+    throw std::runtime_error(
+        "DuckToIR unsupported: expression is not a (possibly cast) column "
+        "reference: " + e->ToString());
+  }
+  return col;
 }
 std::unique_ptr<AQPStmt> DuckToIR::ConstructSimplestStmt(
     duckdb::LogicalOperator *duckdb_plan_pointer,
@@ -160,11 +175,9 @@ std::unique_ptr<AQPStmt> DuckToIR::ConstructSimplestStmt(
       break;
     }
     default:
-      duckdb::Printer::Print(duckdb::StringUtil::Format(
-          "Do not support yet, op->type:  %s",
-          LogicalOperatorToString(duckdb_plan_pointer->type)));
-      D_ASSERT(false);
-      return nullptr;
+      throw std::runtime_error(
+          "DuckToIR unsupported: logical operator type " +
+          LogicalOperatorToString(duckdb_plan_pointer->type));
     }
 
     // Set estimated cardinality for all operators
@@ -199,24 +212,33 @@ DuckToIR::ConstructSimplestProj(duckdb::LogicalProjection &proj_op,
   children.emplace_back(std::move(child));
 
   std::vector<std::unique_ptr<SimplestAttr>> target_list;
+  std::vector<std::unique_ptr<AQPExpr>> expr_target_list;
+  bool has_expr_targets = false;
   for (const auto &expr : proj_op.expressions) {
-    auto *col_expr = UnwrapToColumnRef(expr.get());
-    D_ASSERT(col_expr->expression_class ==
-             duckdb::ExpressionClass::BOUND_COLUMN_REF);
-    auto &column_ref_expr = col_expr->Cast<duckdb::BoundColumnRefExpression>();
-    // Resolve binding index to actual column index
-    auto actual_column_idx =
-        ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
-                                 column_ref_expr.binding.column_index);
-    // Get the correct column name (use chunk_col_names_ for temp tables)
-    std::string actual_column_name =
-        ResolveColumnName(column_ref_expr.binding.table_index,
-                          actual_column_idx, column_ref_expr.alias);
-    auto simplest_target = std::make_unique<SimplestAttr>(
-        ConvertVarType(column_ref_expr.return_type),
-        column_ref_expr.binding.table_index, actual_column_idx,
-        actual_column_name);
-    target_list.emplace_back(std::move(simplest_target));
+    auto *col_expr = TryUnwrapCastToColumnRef(expr.get());
+    if (col_expr) {
+      auto &column_ref_expr = col_expr->Cast<duckdb::BoundColumnRefExpression>();
+      auto actual_column_idx =
+          ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
+                                   column_ref_expr.binding.column_index);
+      std::string actual_column_name =
+          ResolveColumnName(column_ref_expr.binding.table_index,
+                            actual_column_idx, column_ref_expr.alias);
+      auto simplest_target = std::make_unique<SimplestAttr>(
+          ConvertVarType(column_ref_expr.return_type),
+          column_ref_expr.binding.table_index, actual_column_idx,
+          actual_column_name);
+      target_list.emplace_back(std::move(simplest_target));
+      expr_target_list.emplace_back(nullptr);
+    } else {
+      auto aqp_expr = ConvertExprToAQPExpr(expr.get());
+      // Placeholder attr with table_index=0, col_index=0
+      auto placeholder = std::make_unique<SimplestAttr>(
+          ConvertVarType(expr->return_type), 0, 0, expr->GetName());
+      target_list.emplace_back(std::move(placeholder));
+      expr_target_list.emplace_back(std::move(aqp_expr));
+      has_expr_targets = true;
+    }
   }
   // Register the projection's output bindings so parent joins can resolve
   // column references through this projection's table_index.
@@ -229,6 +251,8 @@ DuckToIR::ConstructSimplestProj(duckdb::LogicalProjection &proj_op,
   auto base_stmt = std::make_unique<AQPStmt>(
       std::move(children), std::move(target_list),
       SimplestNodeType::ProjectionNode);
+  if (has_expr_targets)
+    base_stmt->expr_target_list = std::move(expr_target_list);
 
   auto simplest_projection =
       std::make_unique<SimplestProjection>(std::move(base_stmt), table_index);
@@ -291,21 +315,33 @@ DuckToIR::ConstructSimplestAggGroup(duckdb::LogicalAggregate &agg_group_op,
 #endif
     auto &aggregate_expr = agg_expr->Cast<duckdb::BoundAggregateExpression>();
     std::string agg_fn_type = aggregate_expr.function.name;
-    for (const auto &expr : aggregate_expr.children) {
-      auto *agg_col = UnwrapToColumnRef(expr.get());
-      D_ASSERT(agg_col->expression_class ==
-               duckdb::ExpressionClass::BOUND_COLUMN_REF);
-      auto &column_ref_expr = agg_col->Cast<duckdb::BoundColumnRefExpression>();
-      auto actual_col_idx =
-          ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
-                                   column_ref_expr.binding.column_index);
-      simplest_attr = std::make_unique<SimplestAttr>(
-          ConvertVarType(column_ref_expr.return_type),
-          column_ref_expr.binding.table_index, actual_col_idx,
-          ResolveColumnName(column_ref_expr.binding.table_index, actual_col_idx,
-                            column_ref_expr.alias));
-      agg_fns.emplace_back(std::make_pair(std::move(simplest_attr),
-                                          ConvertAggFnType(agg_fn_type)));
+    if (aggregate_expr.IsDistinct()) {
+      throw std::runtime_error(
+          "DuckToIR unsupported: DISTINCT aggregate " + agg_fn_type);
+    }
+    if (aggregate_expr.filter) {
+      throw std::runtime_error(
+          "DuckToIR unsupported: FILTER clause on aggregate " + agg_fn_type);
+    }
+    if (aggregate_expr.children.empty() && agg_fn_type == "count_star") {
+      agg_fns.emplace_back(nullptr, SimplestAggFnType::CountStar);
+    } else {
+      for (const auto &expr : aggregate_expr.children) {
+        auto *agg_col = UnwrapToColumnRef(expr.get());
+        D_ASSERT(agg_col->expression_class ==
+                 duckdb::ExpressionClass::BOUND_COLUMN_REF);
+        auto &column_ref_expr = agg_col->Cast<duckdb::BoundColumnRefExpression>();
+        auto actual_col_idx =
+            ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
+                                     column_ref_expr.binding.column_index);
+        simplest_attr = std::make_unique<SimplestAttr>(
+            ConvertVarType(column_ref_expr.return_type),
+            column_ref_expr.binding.table_index, actual_col_idx,
+            ResolveColumnName(column_ref_expr.binding.table_index, actual_col_idx,
+                              column_ref_expr.alias));
+        agg_fns.emplace_back(std::make_pair(std::move(simplest_attr),
+                                            ConvertAggFnType(agg_fn_type)));
+      }
     }
   }
 
@@ -378,17 +414,16 @@ DuckToIR::ConstructSimplestLimit(duckdb::LogicalLimit &limit_op,
   LimitVal limit_val{}, offset_val{};
   switch (limit_op.limit_val.Type()) {
   case duckdb::LimitNodeType::UNSET:
-    duckdb::Printer::Print("Unset limit node type!");
-    D_ASSERT(false);
-    exit(-1);
+    throw std::runtime_error("DuckToIR unsupported: unset limit type");
   case duckdb::LimitNodeType::CONSTANT_VALUE: {
     limit_val.type = SimplestLimitType::CONSTANT_VALUE;
     limit_val.val = limit_op.limit_val.GetConstantValue();
     break;
   }
   default:
-    duckdb::Printer::Print("Unsupport limit type!!!");
-    D_ASSERT(false);
+    throw std::runtime_error(
+        "DuckToIR unsupported: limit type " +
+        std::to_string(static_cast<int>(limit_op.limit_val.Type())));
   }
   switch (limit_op.offset_val.Type()) {
   case duckdb::LimitNodeType::UNSET: {
@@ -402,8 +437,9 @@ DuckToIR::ConstructSimplestLimit(duckdb::LogicalLimit &limit_op,
     break;
   }
   default:
-    duckdb::Printer::Print("Unsupport limit type!!!");
-    D_ASSERT(false);
+    throw std::runtime_error(
+        "DuckToIR unsupported: offset type " +
+        std::to_string(static_cast<int>(limit_op.offset_val.Type())));
   }
 
   auto base_stmt = std::make_unique<AQPStmt>(std::move(children),
@@ -436,10 +472,7 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
   SimplestJoinType join_type;
   switch (join_op.join_type) {
   case duckdb::JoinType::INVALID:
-    duckdb::Printer::Print("Invalid join type!");
-    join_type = SimplestJoinType::InvalidJoinType;
-    D_ASSERT(false);
-    break;
+    throw std::runtime_error("DuckToIR unsupported: invalid join type");
   case duckdb::JoinType::LEFT:
     join_type = SimplestJoinType::Left;
     break;
@@ -456,10 +489,9 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
     join_type = SimplestJoinType::Semi;
     break;
   default:
-    duckdb::Printer::Print(duckdb::StringUtil::Format(
-        "Do not support yet, join_type:  %s", join_op.join_type));
-    join_type = SimplestJoinType::InvalidJoinType;
-    D_ASSERT(false);
+    throw std::runtime_error(
+        "DuckToIR unsupported: join type " +
+        std::to_string(static_cast<int>(join_op.join_type)));
   }
 
   std::vector<std::unique_ptr<AQPStmt>> children;
@@ -469,55 +501,54 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
                                                   SimplestNodeType::JoinNode);
 
   std::vector<std::unique_ptr<SimplestVarComparison>> join_conditions;
+  std::vector<std::unique_ptr<AQPExpr>> general_join_quals;
   for (const auto &cond : join_op.conditions) {
     auto comp_type = ConvertCompType(cond.comparison);
     const auto &left_cond = cond.left;
-    auto left_type = ConvertVarType(left_cond->return_type);
-    auto *left_col_expr = UnwrapToColumnRef(left_cond.get());
-    D_ASSERT(left_col_expr->expression_class ==
-             duckdb::ExpressionClass::BOUND_COLUMN_REF);
-    auto &column_ref_left_cond =
-        left_col_expr->Cast<duckdb::BoundColumnRefExpression>();
-    // Resolve binding index to actual column index
-    auto left_actual_col_idx =
-        ResolveDuckDBColumnIndex(column_ref_left_cond.binding.table_index,
-                                 column_ref_left_cond.binding.column_index);
-    // Get the correct column name (use chunk_col_names_ for temp tables)
-    std::string left_actual_col_name =
-        ResolveColumnName(column_ref_left_cond.binding.table_index,
-                          left_actual_col_idx, column_ref_left_cond.alias);
-    auto left_simplest_cond = std::make_unique<SimplestAttr>(
-        left_type, column_ref_left_cond.binding.table_index,
-        left_actual_col_idx, left_actual_col_name);
     const auto &right_cond = cond.right;
-    auto right_type = ConvertVarType(right_cond->return_type);
-    auto *right_col_expr = UnwrapToColumnRef(right_cond.get());
-    D_ASSERT(right_col_expr->expression_class ==
-             duckdb::ExpressionClass::BOUND_COLUMN_REF);
-    auto &column_ref_right_cond =
-        right_col_expr->Cast<duckdb::BoundColumnRefExpression>();
-    // Resolve binding index to actual column index
-    auto right_actual_col_idx =
-        ResolveDuckDBColumnIndex(column_ref_right_cond.binding.table_index,
-                                 column_ref_right_cond.binding.column_index);
-    // Get the correct column name (use chunk_col_names_ for temp tables)
-    std::string right_actual_col_name =
-        ResolveColumnName(column_ref_right_cond.binding.table_index,
-                          right_actual_col_idx, column_ref_right_cond.alias);
-    auto right_simplest_cond = std::make_unique<SimplestAttr>(
-        right_type, column_ref_right_cond.binding.table_index,
-        right_actual_col_idx, right_actual_col_name);
-#ifdef DEBUG
-    D_ASSERT(left_type == right_type);
-#endif
-    auto simplest_cond = std::make_unique<SimplestVarComparison>(
-        comp_type, std::move(left_simplest_cond),
-        std::move(right_simplest_cond));
-    join_conditions.emplace_back(std::move(simplest_cond));
+
+    auto *left_col_expr = TryUnwrapCastToColumnRef(left_cond.get());
+    auto *right_col_expr = TryUnwrapCastToColumnRef(right_cond.get());
+
+    if (left_col_expr && right_col_expr) {
+      auto &lr = left_col_expr->Cast<duckdb::BoundColumnRefExpression>();
+      auto left_idx = ResolveDuckDBColumnIndex(lr.binding.table_index,
+                                                lr.binding.column_index);
+      auto left_name = ResolveColumnName(lr.binding.table_index, left_idx,
+                                          lr.alias);
+      auto left_attr = std::make_unique<SimplestAttr>(
+          ConvertVarType(left_cond->return_type), lr.binding.table_index,
+          left_idx, left_name);
+
+      auto &rr = right_col_expr->Cast<duckdb::BoundColumnRefExpression>();
+      auto right_idx = ResolveDuckDBColumnIndex(rr.binding.table_index,
+                                                 rr.binding.column_index);
+      auto right_name = ResolveColumnName(rr.binding.table_index, right_idx,
+                                           rr.alias);
+      auto right_attr = std::make_unique<SimplestAttr>(
+          ConvertVarType(right_cond->return_type), rr.binding.table_index,
+          right_idx, right_name);
+
+      join_conditions.emplace_back(std::make_unique<SimplestVarComparison>(
+          comp_type, std::move(left_attr), std::move(right_attr)));
+    } else {
+      auto left_aqp = ConvertExprToAQPExpr(left_cond.get());
+      auto right_aqp = ConvertExprToAQPExpr(right_cond.get());
+      if (!left_aqp || !right_aqp) {
+        throw std::runtime_error(
+            "DuckToIR unsupported: join condition expression " +
+            (left_aqp ? right_cond->ToString() : left_cond->ToString()));
+      }
+      general_join_quals.emplace_back(
+          std::make_unique<SimplestGeneralComparison>(
+              comp_type, std::move(left_aqp), std::move(right_aqp)));
+    }
   }
 
   auto simplest_join = std::make_unique<SimplestJoin>(
       std::move(base_stmt), std::move(join_conditions), join_type);
+  for (auto &q : general_join_quals)
+    simplest_join->qual_vec.push_back(std::move(q));
 
   if (join_op.join_type == duckdb::JoinType::MARK) {
     simplest_join->SetMarkIndex(join_op.mark_index);
@@ -783,8 +814,9 @@ SimplestExprType DuckToIR::ConvertCompType(duckdb::ExpressionType type) {
   case duckdb::ExpressionType::CONJUNCTION_OR:
     return SimplestExprType::LogicalOp;
   default:
-    duckdb::Printer::Print("Invalid comparison type!");
-    return SimplestExprType::InvalidExprType;
+    throw std::runtime_error(
+        "DuckToIR unsupported: comparison expression type " +
+        std::to_string(static_cast<int>(type)));
   }
 }
 
@@ -797,8 +829,8 @@ SimplestLogicalOp DuckToIR::ConvertLogicalType(duckdb::ExpressionType type) {
   case duckdb::ExpressionType::OPERATOR_NOT:
     return SimplestLogicalOp::LogicalNot;
   default:
-    duckdb::Printer::Print("Invalid logical op!");
-    return SimplestLogicalOp::InvalidLogicalOp;
+    throw std::runtime_error("DuckToIR unsupported: logical op type " +
+                             std::to_string(static_cast<int>(type)));
   }
 }
 
@@ -806,7 +838,15 @@ SimplestVarType DuckToIR::ConvertVarType(const duckdb::LogicalType &type) {
   switch (type.id()) {
   case duckdb::LogicalTypeId::BOOLEAN:
     return SimplestVarType::BoolVar;
+  case duckdb::LogicalTypeId::TINYINT:
+  case duckdb::LogicalTypeId::SMALLINT:
   case duckdb::LogicalTypeId::INTEGER:
+  case duckdb::LogicalTypeId::BIGINT:
+  case duckdb::LogicalTypeId::HUGEINT:
+  case duckdb::LogicalTypeId::UTINYINT:
+  case duckdb::LogicalTypeId::USMALLINT:
+  case duckdb::LogicalTypeId::UINTEGER:
+  case duckdb::LogicalTypeId::UBIGINT:
     return SimplestVarType::IntVar;
   case duckdb::LogicalTypeId::FLOAT:
   case duckdb::LogicalTypeId::DECIMAL:
@@ -816,9 +856,20 @@ SimplestVarType DuckToIR::ConvertVarType(const duckdb::LogicalType &type) {
     return SimplestVarType::StringVar;
   case duckdb::LogicalTypeId::DATE:
     return SimplestVarType::Date;
+  case duckdb::LogicalTypeId::TIMESTAMP:
+  case duckdb::LogicalTypeId::TIMESTAMP_TZ:
+  case duckdb::LogicalTypeId::TIMESTAMP_NS:
+  case duckdb::LogicalTypeId::TIMESTAMP_MS:
+  case duckdb::LogicalTypeId::TIMESTAMP_SEC:
+    return SimplestVarType::TimestampVar;
+  case duckdb::LogicalTypeId::TIME:
+  case duckdb::LogicalTypeId::TIME_TZ:
+    return SimplestVarType::StringVar;
+  case duckdb::LogicalTypeId::INTERVAL:
+    return SimplestVarType::IntervalVar;
   default:
-    duckdb::Printer::Print("Invalid postgres var type!");
-    return SimplestVarType::InvalidVarType;
+    throw std::runtime_error("DuckToIR unsupported: var type " +
+                             type.ToString());
   }
 }
 
@@ -831,8 +882,13 @@ SimplestAggFnType DuckToIR::ConvertAggFnType(const std::string &agg_fn_type) {
     return SimplestAggFnType::Sum;
   else if (agg_fn_type == "avg")
     return SimplestAggFnType::Average;
+  else if (agg_fn_type == "count")
+    return SimplestAggFnType::Count;
+  else if (agg_fn_type == "count_star")
+    return SimplestAggFnType::CountStar;
   else
-    return SimplestAggFnType::InvalidAggType;
+    throw std::runtime_error("DuckToIR unsupported: aggregate function " +
+                             agg_fn_type);
 }
 
 SimplestOrderType DuckToIR::ConvertOrderType(duckdb::OrderType type) {
@@ -898,6 +954,12 @@ DuckToIR::ConvertConstVar(const duckdb::Value &value, const std::string &prefix,
   case duckdb::LogicalTypeId::INTEGER:
   case duckdb::LogicalTypeId::BIGINT: {
     int64_t int_val = value.GetValue<int64_t>();
+    if (int_val < std::numeric_limits<int>::min() ||
+        int_val > std::numeric_limits<int>::max()) {
+      throw std::runtime_error(
+          "DuckToIR unsupported: integer constant out of 32-bit range: " +
+          std::to_string(int_val));
+    }
     simplest_attr =
         std::make_unique<SimplestConstVar>(static_cast<int>(int_val));
     break;
@@ -920,13 +982,104 @@ DuckToIR::ConvertConstVar(const duckdb::Value &value, const std::string &prefix,
     simplest_attr = std::make_unique<SimplestConstVar>(bool_val);
     break;
   }
+  case duckdb::LogicalTypeId::DATE:
+  case duckdb::LogicalTypeId::TIME:
+  case duckdb::LogicalTypeId::TIME_TZ: {
+    std::string str = prefix + value.ToString() + appendix;
+    simplest_attr = std::make_unique<SimplestConstVar>(str);
+    break;
+  }
+  case duckdb::LogicalTypeId::TIMESTAMP:
+  case duckdb::LogicalTypeId::TIMESTAMP_TZ:
+  case duckdb::LogicalTypeId::TIMESTAMP_NS:
+  case duckdb::LogicalTypeId::TIMESTAMP_MS:
+  case duckdb::LogicalTypeId::TIMESTAMP_SEC: {
+    std::string str = prefix + value.ToString() + appendix;
+    simplest_attr = std::make_unique<SimplestConstVar>(str);
+    simplest_attr->ChangeVarType(TimestampVar);
+    break;
+  }
+  case duckdb::LogicalTypeId::INTERVAL: {
+    std::string str = value.ToString();
+    simplest_attr = std::make_unique<SimplestConstVar>(str);
+    simplest_attr->ChangeVarType(IntervalVar);
+    break;
+  }
   default:
-    duckdb::Printer::Print(
-        duckdb::StringUtil::Format("Do not support yet, value.type: %s",
-                                   LogicalTypeIdToString(value.type().id())));
-    D_ASSERT(false);
+    throw std::runtime_error(
+        "DuckToIR unsupported: constant value type " +
+        LogicalTypeIdToString(value.type().id()));
   }
   return simplest_attr;
+}
+
+std::unique_ptr<AQPExpr>
+DuckToIR::ConvertExprToAQPExpr(const duckdb::Expression *expr) {
+  if (!expr)
+    throw std::runtime_error("DuckToIR: null expression in "
+                             "ConvertExprToAQPExpr");
+
+  if (expr->expression_class == duckdb::ExpressionClass::BOUND_COLUMN_REF) {
+    auto &col = expr->Cast<duckdb::BoundColumnRefExpression>();
+    auto actual_col = ResolveDuckDBColumnIndex(col.binding.table_index,
+                                               col.binding.column_index);
+    auto name = ResolveColumnName(col.binding.table_index, actual_col, col.alias);
+    auto attr = std::make_unique<SimplestAttr>(
+        ConvertVarType(col.return_type), col.binding.table_index, actual_col, name);
+    return std::make_unique<SimplestSingleAttrExpr>(std::move(attr));
+  }
+
+  if (expr->expression_class == duckdb::ExpressionClass::BOUND_CONSTANT) {
+    auto &c = expr->Cast<duckdb::BoundConstantExpression>();
+    auto cv = ConvertConstVar(c.value);
+    return std::make_unique<SimplestConstExpr>(std::move(cv));
+  }
+
+  if (expr->expression_class == duckdb::ExpressionClass::BOUND_CAST) {
+    auto &cast = expr->Cast<duckdb::BoundCastExpression>();
+    auto child_expr = ConvertExprToAQPExpr(cast.child.get());
+    return std::make_unique<SimplestCastExpr>(
+        std::move(child_expr), ConvertVarType(cast.return_type));
+  }
+
+  if (expr->expression_class == duckdb::ExpressionClass::BOUND_FUNCTION) {
+    auto &fn = expr->Cast<duckdb::BoundFunctionExpression>();
+    if (fn.children.size() == 2) {
+      SimplestArithOp arith_op = ArithInvalid;
+      const auto &name = fn.function.name;
+      if (name == "+" || name == "date_add" || name == "add")
+        arith_op = ArithAdd;
+      else if (name == "-" || name == "date_sub" || name == "subtract" ||
+               name == "date_diff")
+        arith_op = ArithSub;
+      else if (name == "*" || name == "multiply")
+        arith_op = ArithMul;
+      else if (name == "/" || name == "divide")
+        arith_op = ArithDiv;
+      else if (name == "%" || name == "mod")
+        arith_op = ArithMod;
+
+      if (arith_op != ArithInvalid) {
+        auto left = ConvertExprToAQPExpr(fn.children[0].get());
+        auto right = ConvertExprToAQPExpr(fn.children[1].get());
+        return std::make_unique<SimplestArithExpr>(
+            arith_op, std::move(left), std::move(right),
+            ConvertVarType(fn.return_type));
+      }
+    }
+    // Generic function expression (substring, etc.)
+    std::vector<std::unique_ptr<AQPExpr>> args;
+    for (auto &child : fn.children) {
+      args.push_back(ConvertExprToAQPExpr(child.get()));
+    }
+    return std::make_unique<SimplestFunctionExpr>(
+        fn.function.name, std::move(args));
+  }
+
+  throw std::runtime_error("DuckToIR unsupported: expression class " +
+                           std::to_string(static_cast<int>(
+                               expr->expression_class)) +
+                           " in " + expr->ToString());
 }
 
 std::unique_ptr<AQPExpr>
@@ -965,25 +1118,12 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
       return unique_ptr_cast<SimplestVarConstComparison, AQPExpr>(
           std::move(simplest_var_const_comp));
     } else {
-      duckdb::Printer::Print(
-          "Unknown bound function type in CollectQualVecExprs");
-      D_ASSERT(false);
+      // Generic function in filter context → use ConvertExprToAQPExpr
+      return ConvertExprToAQPExpr(expr.get());
     }
-
-    break;
   }
-  case duckdb::ExpressionType::CASE_EXPR: {
-    auto &case_expr = expr->Cast<duckdb::CaseExpression>();
-    for (auto &case_check : case_expr.case_checks) {
-      auto &when_expr = case_check.when_expr;
-      auto &then_expr = case_check.then_expr;
-    }
-    auto &else_expr = case_expr.else_expr;
-    duckdb::Printer::Print(
-        "TODO: Need to implement CASE_EXPR in CollectQualVecExprs");
-    D_ASSERT(false);
-    break;
-  }
+  case duckdb::ExpressionType::CASE_EXPR:
+    throw std::runtime_error("DuckToIR unsupported: CASE expression");
   case duckdb::ExpressionType::COMPARE_NOTEQUAL:
   case duckdb::ExpressionType::COMPARE_EQUAL:
   case duckdb::ExpressionType::COMPARE_GREATERTHAN:
@@ -991,47 +1131,52 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
   case duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO:
   case duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO: {
     auto &comparison_expr = expr->Cast<duckdb::BoundComparisonExpression>();
-    auto &left_expr = comparison_expr.left;
-    auto left_simplest_attr = ConvertAttr(left_expr);
+    auto &left_expr_duck = comparison_expr.left;
+    auto &right_expr_duck = comparison_expr.right;
 
-    // Right side can be BOUND_CONSTANT or BOUND_CAST wrapping a BOUND_CONSTANT
-    duckdb::BoundConstantExpression *const_expr_ptr = nullptr;
-    if (comparison_expr.right->expression_class ==
-        duckdb::ExpressionClass::BOUND_COLUMN_REF) {
-      auto right_simplest_attr = ConvertAttr(comparison_expr.right);
-      auto simplest_var_comp = std::make_unique<SimplestVarComparison>(
-          ConvertCompType(expr->type), std::move(left_simplest_attr),
-          std::move(right_simplest_attr));
-      return unique_ptr_cast<SimplestVarComparison, AQPExpr>(
-          std::move(simplest_var_comp));
-    } else {
-      if (comparison_expr.right->expression_class ==
-          duckdb::ExpressionClass::BOUND_CONSTANT) {
-        const_expr_ptr =
-            &comparison_expr.right->Cast<duckdb::BoundConstantExpression>();
-      } else if (comparison_expr.right->expression_class ==
-                 duckdb::ExpressionClass::BOUND_CAST) {
-        // Unwrap CAST to get the underlying constant
-        auto &cast_expr =
-            comparison_expr.right->Cast<duckdb::BoundCastExpression>();
-        D_ASSERT(cast_expr.child->expression_class ==
-                 duckdb::ExpressionClass::BOUND_CONSTANT);
-        const_expr_ptr =
-            &cast_expr.child->Cast<duckdb::BoundConstantExpression>();
-      } else {
-        duckdb::Printer::Print(duckdb::StringUtil::Format(
-            "Unsupported right expression class in comparison: %d",
-            static_cast<int>(comparison_expr.right->expression_class)));
-        D_ASSERT(false);
-      }
-      auto right_simplest_attr = ConvertConstVar(const_expr_ptr->value);
+    // Fast path: left is column ref (possibly cast-wrapped)
+    bool left_is_col = TryUnwrapCastToColumnRef(left_expr_duck.get()) != nullptr;
 
-      auto simplest_var_const_comp =
-          std::make_unique<SimplestVarConstComparison>(
-              ConvertCompType(expr->type), std::move(left_simplest_attr),
-              std::move(right_simplest_attr));
-      return unique_ptr_cast<SimplestVarConstComparison, AQPExpr>(
-          std::move(simplest_var_const_comp));
+    if (left_is_col && right_expr_duck->expression_class ==
+                           duckdb::ExpressionClass::BOUND_COLUMN_REF) {
+      // col vs col → VarComparison
+      auto left_attr = ConvertAttr(left_expr_duck);
+      auto right_attr = ConvertAttr(right_expr_duck);
+      return std::make_unique<SimplestVarComparison>(
+          ConvertCompType(expr->type), std::move(left_attr),
+          std::move(right_attr));
+    }
+
+    // col vs constant (possibly cast-wrapped)
+    duckdb::BoundConstantExpression *const_ptr = nullptr;
+    if (right_expr_duck->expression_class ==
+        duckdb::ExpressionClass::BOUND_CONSTANT) {
+      const_ptr =
+          &right_expr_duck->Cast<duckdb::BoundConstantExpression>();
+    } else if (right_expr_duck->expression_class ==
+               duckdb::ExpressionClass::BOUND_CAST) {
+      auto &cast = right_expr_duck->Cast<duckdb::BoundCastExpression>();
+      if (cast.child->expression_class ==
+          duckdb::ExpressionClass::BOUND_CONSTANT)
+        const_ptr =
+            &cast.child->Cast<duckdb::BoundConstantExpression>();
+    }
+
+    if (left_is_col && const_ptr) {
+      auto left_attr = ConvertAttr(left_expr_duck);
+      auto right_const = ConvertConstVar(const_ptr->value);
+      return std::make_unique<SimplestVarConstComparison>(
+          ConvertCompType(expr->type), std::move(left_attr),
+          std::move(right_const));
+    }
+
+    // General path: one or both sides are complex expressions
+    {
+      auto left_aqp = ConvertExprToAQPExpr(left_expr_duck.get());
+      auto right_aqp = ConvertExprToAQPExpr(right_expr_duck.get());
+      return std::make_unique<SimplestGeneralComparison>(
+          ConvertCompType(expr->type), std::move(left_aqp),
+          std::move(right_aqp));
     }
   }
   case duckdb::ExpressionType::CONJUNCTION_AND:
@@ -1052,37 +1197,38 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
   case duckdb::ExpressionType::COMPARE_BETWEEN: {
     auto &between_expr = expr->Cast<duckdb::BoundBetweenExpression>();
 
-    // Convert input twice since we need it for both comparisons
-    auto input_attr1 = ConvertAttr(between_expr.input);
-#ifdef DEBUG
-    D_ASSERT(between_expr.lower->expression_class ==
-             ExpressionClass::BOUND_CONSTANT);
-#endif
-    auto &lower_expr =
-        between_expr.lower->Cast<duckdb::BoundConstantExpression>();
-    auto lower_attr = ConvertConstVar(lower_expr.value);
-#ifdef DEBUG
-    D_ASSERT(between_expr.upper->expression_class ==
-             ExpressionClass::BOUND_CONSTANT);
-#endif
-    auto &upper_expr =
-        between_expr.upper->Cast<duckdb::BoundConstantExpression>();
-    auto upper_attr = ConvertConstVar(upper_expr.value);
+    auto make_bound = [&](const duckdb::unique_ptr<duckdb::Expression> &input,
+                          const duckdb::unique_ptr<duckdb::Expression> &bound,
+                          SimplestExprType cmp) -> std::unique_ptr<AQPExpr> {
+      if (TryUnwrapCastToColumnRef(input.get())) {
+        if (bound->expression_class ==
+            duckdb::ExpressionClass::BOUND_CONSTANT) {
+          auto &ce = bound->Cast<duckdb::BoundConstantExpression>();
+          auto cv = ConvertConstVar(ce.value);
+          return std::make_unique<SimplestVarConstComparison>(
+              cmp, ConvertAttr(input), std::move(cv));
+        }
+        if (bound->expression_class == duckdb::ExpressionClass::BOUND_CAST) {
+          auto &cast = bound->Cast<duckdb::BoundCastExpression>();
+          if (cast.child->expression_class ==
+              duckdb::ExpressionClass::BOUND_CONSTANT) {
+            auto &ce = cast.child->Cast<duckdb::BoundConstantExpression>();
+            auto cv = ConvertConstVar(ce.value);
+            return std::make_unique<SimplestVarConstComparison>(
+                cmp, ConvertAttr(input), std::move(cv));
+          }
+        }
+      }
+      auto left_aqp = ConvertExprToAQPExpr(input.get());
+      auto right_aqp = ConvertExprToAQPExpr(bound.get());
+      return std::make_unique<SimplestGeneralComparison>(
+          cmp, std::move(left_aqp), std::move(right_aqp));
+    };
 
-    // input >= lower
-    auto lower_comp = std::make_unique<SimplestVarConstComparison>(
-        SimplestExprType::GreaterEqual, std::move(input_attr1),
-        std::move(lower_attr));
-
-    // Convert input again for the second comparison
-    auto input_attr2 = ConvertAttr(between_expr.input);
-
-    // input <= upper
-    auto upper_comp = std::make_unique<SimplestVarConstComparison>(
-        SimplestExprType::LessEqual, std::move(input_attr2),
-        std::move(upper_attr));
-
-    // Combine with AND
+    auto lower_comp = make_bound(between_expr.input, between_expr.lower,
+                                 SimplestExprType::GreaterEqual);
+    auto upper_comp = make_bound(between_expr.input, between_expr.upper,
+                                 SimplestExprType::LessEqual);
     return std::make_unique<SimplestLogicalExpr>(
         LogicalAnd, std::move(lower_comp), std::move(upper_comp));
 
@@ -1156,15 +1302,8 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
     return unique_ptr_cast<SimplestLogicalExpr, AQPExpr>(
         std::move(simplest_not_expr));
   }
-  case duckdb::ExpressionType::OPERATOR_COALESCE: {
-    auto &operator_expr = expr->Cast<duckdb::BoundOperatorExpression>();
-    for (auto &child_expr : operator_expr.children) {
-    }
-    duckdb::Printer::Print("TODO: Need to implement BoundOperatorExpression in "
-                           "CollectQualVecExprs");
-    D_ASSERT(false);
-    break;
-  }
+  case duckdb::ExpressionType::OPERATOR_COALESCE:
+    throw std::runtime_error("DuckToIR unsupported: COALESCE expression");
   case duckdb::ExpressionType::BOUND_COLUMN_REF: {
 #ifdef DEBUG
     D_ASSERT(ExpressionType::BOUND_COLUMN_REF == expr->type);
@@ -1188,13 +1327,9 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
         std::move(simplest_attr_expr));
   }
   default:
-    duckdb::Printer::Print(
-        duckdb::StringUtil::Format("Do not support yet, expr->type:  %s",
-                                   ExpressionTypeToString(expr->type)));
-    D_ASSERT(false);
+    throw std::runtime_error("DuckToIR unsupported: expression type " +
+                             ExpressionTypeToString(expr->type));
   }
-
-  return nullptr;
 }
 
 std::vector<std::unique_ptr<AQPExpr>> DuckToIR::CollectQualVecExprs(
@@ -1271,13 +1406,10 @@ std::unique_ptr<AQPExpr> DuckToIR::CollectScanFilter(
     return unique_ptr_cast<SimplestIsNullExpr, AQPExpr>(
         std::move(simplest_is_null));
   }
-  case duckdb::TableFilterType::STRUCT_EXTRACT: {
-    auto &struct_filter = filter_cond->Cast<duckdb::StructFilter>();
-    duckdb::Printer::Print(
-        "Do not support yet: TableFilterType::STRUCT_EXTRACT");
-    D_ASSERT(false);
+  default:
+    throw std::runtime_error(
+        "DuckToIR unsupported: table filter type " +
+        std::to_string(static_cast<int>(filter_cond->filter_type)));
   }
-  }
-  return nullptr;
 }
 } // namespace ir_sql_converter
