@@ -47,6 +47,8 @@ private:
   // the comma-separated FROM list since they're part of the JOIN clause).
   std::unordered_set<unsigned int> outer_join_tables;
   std::vector<std::unique_ptr<SimplestAttr>> group_by_vec;
+  std::vector<std::unique_ptr<AQPExpr>> group_exprs_vec;
+  std::vector<std::set<idx_t>> grouping_sets;
   std::vector<std::string> group_by_field;
   std::vector<std::string> order_by_field;
   std::string limit_field;
