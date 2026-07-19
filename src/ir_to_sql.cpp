@@ -1,8 +1,24 @@
 #include "ir_to_sql.h"
 
+#include <cstdint>
+#include <cstdio>
 #include <stdexcept>
 
 namespace ir_sql_converter {
+
+static std::string TruncateIdentifier(const std::string &name) {
+  constexpr size_t kMaxLen = 63;
+  if (name.size() <= kMaxLen)
+    return name;
+  uint64_t h = 14695981039346656037ULL;
+  for (unsigned char c : name) {
+    h ^= c;
+    h *= 1099511628211ULL;
+  }
+  char buf[18];
+  snprintf(buf, sizeof(buf), "%016llx", (unsigned long long)h);
+  return std::string("c_") + buf;
+}
 std::string IRToSQLConverter::ConvertSimplestIRToSQL(AQPStmt &plan) {
   std::string sql_code;
 #ifdef DEBUG
@@ -163,8 +179,8 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
                   GetActualColumnName(table_idx, col_idx, orig_col_name);
               std::string select_str = table_name + "." + actual_col_name;
               select_str = agg_fn_type + "(" + select_str + ")";
-              alias_name = table_names[table_idx] + "_" +
-                           std::to_string(table_idx) + "_" + orig_col_name;
+              alias_name = TruncateIdentifier(table_names[table_idx] + "_" +
+                           std::to_string(table_idx) + "_" + orig_col_name);
               select_str += " AS " + alias_name;
               select_field.emplace_back(select_str);
             }
@@ -181,9 +197,8 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
             std::string actual_col_name =
                 GetActualColumnName(table_idx, col_idx, orig_col_name);
             std::string select_str = table_name + "." + actual_col_name;
-            // Generate unique alias: table_name + "_" + column_name
-            alias_name = table_names[table_idx] + "_" +
-                         std::to_string(table_idx) + "_" + orig_col_name;
+            alias_name = TruncateIdentifier(table_names[table_idx] + "_" +
+                         std::to_string(table_idx) + "_" + orig_col_name);
             select_str += " AS " + alias_name;
             select_field.emplace_back(select_str);
           } else {
@@ -217,9 +232,8 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
               "IRToSQL unsupported: plain projection target with non-empty "
               "GROUP BY");
         }
-        // Generate unique alias: table_name + "_" + column_name
-        alias_name = table_names[target_table_index] + "_" +
-                     std::to_string(target_table_index) + "_" + orig_col_name;
+        alias_name = TruncateIdentifier(table_names[target_table_index] + "_" +
+                     std::to_string(target_table_index) + "_" + orig_col_name);
         select_str += " AS " + alias_name;
         select_field.emplace_back(select_str);
       }
