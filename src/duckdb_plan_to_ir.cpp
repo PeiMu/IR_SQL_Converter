@@ -6,6 +6,40 @@
 
 namespace ir_sql_converter {
 
+// Physical bit-width that FlatTable uses for a given DuckDB LogicalType.
+// DECIMAL(p<=9) and small ints → 32; BIGINT/DECIMAL(9<p<=18) → 64; others → 0.
+static uint8_t GetPhysicalBitWidth(const duckdb::LogicalType &type) {
+  switch (type.id()) {
+  case duckdb::LogicalTypeId::TINYINT:
+  case duckdb::LogicalTypeId::UTINYINT:
+  case duckdb::LogicalTypeId::SMALLINT:
+  case duckdb::LogicalTypeId::USMALLINT:
+  case duckdb::LogicalTypeId::INTEGER:
+  case duckdb::LogicalTypeId::UINTEGER:
+  case duckdb::LogicalTypeId::DATE:
+    return 32;
+  case duckdb::LogicalTypeId::BIGINT:
+  case duckdb::LogicalTypeId::UBIGINT:
+  case duckdb::LogicalTypeId::HUGEINT:
+  case duckdb::LogicalTypeId::TIMESTAMP:
+  case duckdb::LogicalTypeId::TIMESTAMP_TZ:
+  case duckdb::LogicalTypeId::TIMESTAMP_NS:
+  case duckdb::LogicalTypeId::TIMESTAMP_MS:
+  case duckdb::LogicalTypeId::TIMESTAMP_SEC:
+    return 64;
+  case duckdb::LogicalTypeId::DECIMAL: {
+    auto width = duckdb::DecimalType::GetWidth(type);
+    return width <= 9 ? 32 : 64;
+  }
+  case duckdb::LogicalTypeId::FLOAT:
+    return 32;
+  case duckdb::LogicalTypeId::DOUBLE:
+    return 64;
+  default:
+    return 0;
+  }
+}
+
 // Unwrap casts and DuckDB Compressed-Materialization wrappers around a column
 // reference; nullptr when the expression is anything else.
 // __internal_compress_* functions are storage-layer wrappers inserted by
@@ -57,6 +91,8 @@ std::unique_ptr<AQPStmt> DuckToIR::ConstructSimplestStmt(
                   embed_intermediate_data,
                   this](duckdb::LogicalOperator *duckdb_plan_pointer)
       -> std::unique_ptr<AQPStmt> {
+    if (!duckdb_plan_pointer)
+      return nullptr;
     std::unique_ptr<AQPStmt> left_child, right_child;
     if (!duckdb_plan_pointer->children.empty()) {
       left_child = iterate_plan(duckdb_plan_pointer->children[0].get());
@@ -174,6 +210,39 @@ std::unique_ptr<AQPStmt> DuckToIR::ConstructSimplestStmt(
       }
       break;
     }
+    case duckdb::LogicalOperatorType::LOGICAL_DELIM_JOIN: {
+      auto &join_op =
+          duckdb_plan_pointer->Cast<duckdb::LogicalComparisonJoin>();
+      auto simplest_join = ConstructSimplestJoin(join_op, std::move(left_child),
+                                                 std::move(right_child));
+      result =
+          unique_ptr_cast<SimplestJoin, AQPStmt>(std::move(simplest_join));
+      break;
+    }
+    case duckdb::LogicalOperatorType::LOGICAL_DELIM_GET: {
+      auto &delim_get =
+          duckdb_plan_pointer->Cast<duckdb::LogicalDelimGet>();
+      std::vector<std::unique_ptr<AQPStmt>> children;
+      std::vector<std::unique_ptr<SimplestAttr>> target_list;
+      compat::column_ids_vector_t col_ids;
+      std::string table_name =
+          "delim_" + std::to_string(delim_get.table_index);
+      for (duckdb::idx_t i = 0; i < delim_get.chunk_types.size(); i++) {
+        col_ids.push_back(compat::MakeColumnIndex(i));
+        auto col_name = "col" + std::to_string(i);
+        target_list.emplace_back(std::make_unique<SimplestAttr>(
+            ConvertVarType(delim_get.chunk_types[i]),
+            delim_get.table_index, static_cast<duckdb::column_t>(i),
+            col_name, GetPhysicalBitWidth(delim_get.chunk_types[i])));
+      }
+      table_column_ids_map[delim_get.table_index] = std::move(col_ids);
+      auto base_stmt = std::make_unique<AQPStmt>(
+          std::move(children), std::move(target_list),
+          SimplestNodeType::ScanNode);
+      result = std::make_unique<SimplestScan>(std::move(base_stmt),
+                                              delim_get.table_index, table_name);
+      break;
+    }
     default:
       throw std::runtime_error(
           "DuckToIR unsupported: logical operator type " +
@@ -227,7 +296,8 @@ DuckToIR::ConstructSimplestProj(duckdb::LogicalProjection &proj_op,
       auto simplest_target = std::make_unique<SimplestAttr>(
           ConvertVarType(column_ref_expr.return_type),
           column_ref_expr.binding.table_index, actual_column_idx,
-          actual_column_name);
+          actual_column_name,
+          GetPhysicalBitWidth(column_ref_expr.return_type));
       target_list.emplace_back(std::move(simplest_target));
       expr_target_list.emplace_back(nullptr);
     } else {
@@ -285,21 +355,32 @@ DuckToIR::ConstructSimplestAggGroup(duckdb::LogicalAggregate &agg_group_op,
   }
   table_column_ids_map[agg_group_op.aggregate_index] = agg_ids;
 
-  for (const auto &group_expr : agg_group_op.groups) {
-    auto *grp_col = UnwrapToColumnRef(group_expr.get());
-    D_ASSERT(grp_col->expression_class ==
-             duckdb::ExpressionClass::BOUND_COLUMN_REF);
-    auto &column_ref_expr =
-        grp_col->Cast<duckdb::BoundColumnRefExpression>();
-    auto actual_col_idx =
-        ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
-                                 column_ref_expr.binding.column_index);
-    simplest_attr = std::make_unique<SimplestAttr>(
-        ConvertVarType(column_ref_expr.return_type),
-        column_ref_expr.binding.table_index, actual_col_idx,
-        ResolveColumnName(column_ref_expr.binding.table_index, actual_col_idx,
-                          column_ref_expr.alias));
-    groups.emplace_back(std::move(simplest_attr));
+  std::vector<std::unique_ptr<AQPExpr>> group_exprs_vec;
+  for (duckdb::idx_t gi = 0; gi < agg_group_op.groups.size(); gi++) {
+    auto &group_expr = agg_group_op.groups[gi];
+    auto *grp_col = TryUnwrapCastToColumnRef(group_expr.get());
+    if (grp_col) {
+      auto &column_ref_expr =
+          grp_col->Cast<duckdb::BoundColumnRefExpression>();
+      auto actual_col_idx =
+          ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
+                                   column_ref_expr.binding.column_index);
+      simplest_attr = std::make_unique<SimplestAttr>(
+          ConvertVarType(column_ref_expr.return_type),
+          column_ref_expr.binding.table_index, actual_col_idx,
+          ResolveColumnName(column_ref_expr.binding.table_index, actual_col_idx,
+                            column_ref_expr.alias),
+          GetPhysicalBitWidth(column_ref_expr.return_type));
+      groups.emplace_back(std::move(simplest_attr));
+      group_exprs_vec.push_back(nullptr);
+    } else {
+      auto aqp_expr = ConvertExprToAQPExpr(group_expr.get());
+      simplest_attr = std::make_unique<SimplestAttr>(
+          SimplestVarType::IntVar, 0, static_cast<duckdb::column_t>(gi),
+          "grp_expr_" + std::to_string(gi), 32);
+      groups.emplace_back(std::move(simplest_attr));
+      group_exprs_vec.push_back(std::move(aqp_expr));
+    }
   }
 
   // set agg_index and group_index
@@ -307,40 +388,48 @@ DuckToIR::ConstructSimplestAggGroup(duckdb::LogicalAggregate &agg_group_op,
   unsigned int group_index = agg_group_op.group_index;
 
   agg_fn_pair agg_fns;
+  std::vector<std::unique_ptr<AQPExpr>> agg_fn_exprs;
 
   // add table_expr of aggregate op expression
+  std::vector<bool> distinct_flags;
   for (const auto &agg_expr : agg_group_op.expressions) {
 #ifdef DEBUG
     D_ASSERT(ExpressionType::BOUND_AGGREGATE == agg_expr->type);
 #endif
     auto &aggregate_expr = agg_expr->Cast<duckdb::BoundAggregateExpression>();
     std::string agg_fn_type = aggregate_expr.function.name;
-    if (aggregate_expr.IsDistinct()) {
-      throw std::runtime_error(
-          "DuckToIR unsupported: DISTINCT aggregate " + agg_fn_type);
-    }
+    bool is_distinct = aggregate_expr.IsDistinct();
     if (aggregate_expr.filter) {
       throw std::runtime_error(
           "DuckToIR unsupported: FILTER clause on aggregate " + agg_fn_type);
     }
     if (aggregate_expr.children.empty() && agg_fn_type == "count_star") {
       agg_fns.emplace_back(nullptr, SimplestAggFnType::CountStar);
+      agg_fn_exprs.push_back(nullptr);
+      distinct_flags.push_back(is_distinct);
     } else {
       for (const auto &expr : aggregate_expr.children) {
-        auto *agg_col = UnwrapToColumnRef(expr.get());
-        D_ASSERT(agg_col->expression_class ==
-                 duckdb::ExpressionClass::BOUND_COLUMN_REF);
-        auto &column_ref_expr = agg_col->Cast<duckdb::BoundColumnRefExpression>();
-        auto actual_col_idx =
-            ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
-                                     column_ref_expr.binding.column_index);
-        simplest_attr = std::make_unique<SimplestAttr>(
-            ConvertVarType(column_ref_expr.return_type),
-            column_ref_expr.binding.table_index, actual_col_idx,
-            ResolveColumnName(column_ref_expr.binding.table_index, actual_col_idx,
-                              column_ref_expr.alias));
-        agg_fns.emplace_back(std::make_pair(std::move(simplest_attr),
-                                            ConvertAggFnType(agg_fn_type)));
+        auto *agg_col = TryUnwrapCastToColumnRef(expr.get());
+        if (agg_col) {
+          auto &column_ref_expr = agg_col->Cast<duckdb::BoundColumnRefExpression>();
+          auto actual_col_idx =
+              ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
+                                       column_ref_expr.binding.column_index);
+          simplest_attr = std::make_unique<SimplestAttr>(
+              ConvertVarType(column_ref_expr.return_type),
+              column_ref_expr.binding.table_index, actual_col_idx,
+              ResolveColumnName(column_ref_expr.binding.table_index, actual_col_idx,
+                                column_ref_expr.alias),
+              GetPhysicalBitWidth(column_ref_expr.return_type));
+          agg_fns.emplace_back(std::make_pair(std::move(simplest_attr),
+                                              ConvertAggFnType(agg_fn_type)));
+          agg_fn_exprs.push_back(nullptr);
+        } else {
+          auto aqp_expr = ConvertExprToAQPExpr(expr.get());
+          agg_fns.emplace_back(nullptr, ConvertAggFnType(agg_fn_type));
+          agg_fn_exprs.push_back(std::move(aqp_expr));
+        }
+        distinct_flags.push_back(is_distinct);
       }
     }
   }
@@ -358,6 +447,22 @@ DuckToIR::ConstructSimplestAggGroup(duckdb::LogicalAggregate &agg_group_op,
         std::move(base_stmt), std::move(agg_fns), std::move(groups), agg_index,
         group_index);
   }
+  simplest_aggregate->agg_fn_exprs = std::move(agg_fn_exprs);
+  simplest_aggregate->agg_distinct = std::move(distinct_flags);
+  simplest_aggregate->group_exprs = std::move(group_exprs_vec);
+
+  if (agg_group_op.grouping_sets.size() > 1 ||
+      (agg_group_op.grouping_sets.size() == 1 &&
+       agg_group_op.grouping_sets[0].size() !=
+           simplest_aggregate->groups.size())) {
+    for (const auto &gs : agg_group_op.grouping_sets) {
+      std::set<ir_sql_converter::idx_t> converted;
+      for (auto v : gs)
+        converted.insert(static_cast<ir_sql_converter::idx_t>(v));
+      simplest_aggregate->grouping_sets.push_back(std::move(converted));
+    }
+  }
+
   return simplest_aggregate;
 }
 
@@ -373,21 +478,27 @@ DuckToIR::ConstructSimplestOrderBy(duckdb::LogicalOrder &order_op,
   std::vector<OrderStruct> orders;
   OrderStruct order_struct;
   std::unique_ptr<SimplestAttr> simplest_attr;
-  for (auto &order : order_op.orders) {
+  for (duckdb::idx_t i = 0; i < order_op.orders.size(); i++) {
+    auto &order = order_op.orders[i];
     order_struct.order_type = ConvertOrderType(order.type);
-    auto *ord_col = UnwrapToColumnRef(order.expression.get());
-    D_ASSERT(ord_col->expression_class ==
-             duckdb::ExpressionClass::BOUND_COLUMN_REF);
-    auto &column_ref_expr =
-        ord_col->Cast<duckdb::BoundColumnRefExpression>();
-    auto actual_col_idx =
-        ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
-                                 column_ref_expr.binding.column_index);
-    simplest_attr = std::make_unique<SimplestAttr>(
-        ConvertVarType(column_ref_expr.return_type),
-        column_ref_expr.binding.table_index, actual_col_idx,
-        ResolveColumnName(column_ref_expr.binding.table_index, actual_col_idx,
-                          column_ref_expr.alias));
+    auto *ord_col = TryUnwrapCastToColumnRef(order.expression.get());
+    if (ord_col) {
+      auto &column_ref_expr =
+          ord_col->Cast<duckdb::BoundColumnRefExpression>();
+      auto actual_col_idx =
+          ResolveDuckDBColumnIndex(column_ref_expr.binding.table_index,
+                                   column_ref_expr.binding.column_index);
+      simplest_attr = std::make_unique<SimplestAttr>(
+          ConvertVarType(column_ref_expr.return_type),
+          column_ref_expr.binding.table_index, actual_col_idx,
+          ResolveColumnName(column_ref_expr.binding.table_index, actual_col_idx,
+                            column_ref_expr.alias),
+          GetPhysicalBitWidth(column_ref_expr.return_type));
+    } else {
+      simplest_attr = std::make_unique<SimplestAttr>(
+          SimplestVarType::IntVar, 0, static_cast<duckdb::column_t>(i),
+          "ord_expr_" + std::to_string(i), 32);
+    }
     order_struct.attr = std::move(simplest_attr);
     orders.emplace_back(std::move(order_struct));
   }
@@ -488,6 +599,15 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
   case duckdb::JoinType::SEMI:
     join_type = SimplestJoinType::Semi;
     break;
+  case duckdb::JoinType::ANTI:
+    join_type = SimplestJoinType::Anti;
+    break;
+  case duckdb::JoinType::OUTER:
+    join_type = SimplestJoinType::Full;
+    break;
+  case duckdb::JoinType::SINGLE:
+    join_type = SimplestJoinType::Left;
+    break;
   default:
     throw std::runtime_error(
         "DuckToIR unsupported: join type " +
@@ -518,7 +638,7 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
                                           lr.alias);
       auto left_attr = std::make_unique<SimplestAttr>(
           ConvertVarType(left_cond->return_type), lr.binding.table_index,
-          left_idx, left_name);
+          left_idx, left_name, GetPhysicalBitWidth(left_cond->return_type));
 
       auto &rr = right_col_expr->Cast<duckdb::BoundColumnRefExpression>();
       auto right_idx = ResolveDuckDBColumnIndex(rr.binding.table_index,
@@ -527,7 +647,7 @@ DuckToIR::ConstructSimplestJoin(duckdb::LogicalComparisonJoin &join_op,
                                            rr.alias);
       auto right_attr = std::make_unique<SimplestAttr>(
           ConvertVarType(right_cond->return_type), rr.binding.table_index,
-          right_idx, right_name);
+          right_idx, right_name, GetPhysicalBitWidth(right_cond->return_type));
 
       join_conditions.emplace_back(std::make_unique<SimplestVarComparison>(
           comp_type, std::move(left_attr), std::move(right_attr)));
@@ -605,7 +725,8 @@ DuckToIR::ConstructSimplestScan(duckdb::LogicalGet &get_op) {
     std::unique_ptr<SimplestAttr> simplest_attr =
         std::make_unique<SimplestAttr>(
             ConvertVarType(get_op.returned_types[actual_column_id]),
-            table_index, actual_column_id, get_op.names[actual_column_id]);
+            table_index, actual_column_id, get_op.names[actual_column_id],
+            GetPhysicalBitWidth(get_op.returned_types[actual_column_id]));
     target_list.emplace_back(std::move(simplest_attr));
   }
 
@@ -616,7 +737,8 @@ DuckToIR::ConstructSimplestScan(duckdb::LogicalGet &get_op) {
     auto &filter_cond = filter.second;
     auto simplest_var_attr = std::make_unique<SimplestAttr>(
         ConvertVarType(get_op.returned_types[actual_column_index]), table_index,
-        actual_column_index, get_op.names[actual_column_index]);
+        actual_column_index, get_op.names[actual_column_index],
+        GetPhysicalBitWidth(get_op.returned_types[actual_column_index]));
     auto simplest_scan_filter_expr =
         CollectScanFilter(filter_cond, std::move(simplest_var_attr));
     qual_vec.emplace_back(std::move(simplest_scan_filter_expr));
@@ -685,7 +807,8 @@ std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunk(
   auto &types = column_data_get_op.types;
   for (size_t i = 0; i < types.size(); i++) {
     auto simplest_attr = std::make_unique<SimplestAttr>(
-        ConvertVarType(types[i]), table_index, i, "col" + std::to_string(i));
+        ConvertVarType(types[i]), table_index, i, "col" + std::to_string(i),
+        GetPhysicalBitWidth(types[i]));
     target_list.emplace_back(std::move(simplest_attr));
   }
 
@@ -730,7 +853,8 @@ std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunkPlaceholder(
   auto &types = column_data_get_op.types;
   for (size_t i = 0; i < types.size(); i++) {
     auto simplest_attr = std::make_unique<SimplestAttr>(
-        ConvertVarType(types[i]), table_index, i, "col" + std::to_string(i));
+        ConvertVarType(types[i]), table_index, i, "col" + std::to_string(i),
+        GetPhysicalBitWidth(types[i]));
     target_list.emplace_back(std::move(simplest_attr));
   }
 
@@ -774,7 +898,8 @@ std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunkFromGet(
                               : "col" + std::to_string(actual_col_id));
     auto simplest_attr = std::make_unique<SimplestAttr>(
         ConvertVarType(get_op.returned_types[actual_col_id]), table_index,
-        actual_col_id, col_name);
+        actual_col_id, col_name,
+        GetPhysicalBitWidth(get_op.returned_types[actual_col_id]));
     target_list.emplace_back(std::move(simplest_attr));
   }
 
@@ -795,6 +920,7 @@ std::unique_ptr<SimplestChunk> DuckToIR::ConstructSimplestChunkFromGet(
 SimplestExprType DuckToIR::ConvertCompType(duckdb::ExpressionType type) {
   switch (type) {
   case duckdb::ExpressionType::COMPARE_EQUAL:
+  case duckdb::ExpressionType::COMPARE_NOT_DISTINCT_FROM:
     return SimplestExprType::Equal;
   case duckdb::ExpressionType::COMPARE_LESSTHAN:
     return SimplestExprType::LessThan;
@@ -886,6 +1012,8 @@ SimplestAggFnType DuckToIR::ConvertAggFnType(const std::string &agg_fn_type) {
     return SimplestAggFnType::Count;
   else if (agg_fn_type == "count_star")
     return SimplestAggFnType::CountStar;
+  else if (agg_fn_type == "stddev_samp")
+    return SimplestAggFnType::StddevSamp;
   else
     throw std::runtime_error("DuckToIR unsupported: aggregate function " +
                              agg_fn_type);
@@ -939,7 +1067,7 @@ DuckToIR::ConvertAttr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
   auto simplest_attr = std::make_unique<SimplestAttr>(
       ConvertVarType(column_ref_expr.return_type),
       column_ref_expr.binding.table_index, actual_column_idx,
-      actual_column_name);
+      actual_column_name, GetPhysicalBitWidth(column_ref_expr.return_type));
   return simplest_attr;
 }
 
@@ -1025,7 +1153,8 @@ DuckToIR::ConvertExprToAQPExpr(const duckdb::Expression *expr) {
                                                col.binding.column_index);
     auto name = ResolveColumnName(col.binding.table_index, actual_col, col.alias);
     auto attr = std::make_unique<SimplestAttr>(
-        ConvertVarType(col.return_type), col.binding.table_index, actual_col, name);
+        ConvertVarType(col.return_type), col.binding.table_index, actual_col, name,
+        GetPhysicalBitWidth(col.return_type));
     return std::make_unique<SimplestSingleAttrExpr>(std::move(attr));
   }
 
@@ -1076,6 +1205,103 @@ DuckToIR::ConvertExprToAQPExpr(const duckdb::Expression *expr) {
         fn.function.name, std::move(args));
   }
 
+  if (expr->expression_class == duckdb::ExpressionClass::BOUND_OPERATOR) {
+    auto &op = expr->Cast<duckdb::BoundOperatorExpression>();
+    if (expr->type == duckdb::ExpressionType::OPERATOR_COALESCE) {
+      std::vector<std::unique_ptr<AQPExpr>> args;
+      for (auto &child : op.children) {
+        args.push_back(ConvertExprToAQPExpr(child.get()));
+      }
+      return std::make_unique<SimplestFunctionExpr>(
+          "COALESCE", std::move(args));
+    }
+    if (expr->type == duckdb::ExpressionType::OPERATOR_IS_NULL ||
+        expr->type == duckdb::ExpressionType::OPERATOR_IS_NOT_NULL) {
+      auto *col = TryUnwrapCastToColumnRef(op.children[0].get());
+      if (col) {
+        auto &cr = col->Cast<duckdb::BoundColumnRefExpression>();
+        auto actual_col = ResolveDuckDBColumnIndex(
+            cr.binding.table_index, cr.binding.column_index);
+        auto attr = std::make_unique<SimplestAttr>(
+            ConvertVarType(cr.return_type), cr.binding.table_index,
+            actual_col,
+            ResolveColumnName(cr.binding.table_index, actual_col, cr.alias),
+            GetPhysicalBitWidth(cr.return_type));
+        auto null_type =
+            expr->type == duckdb::ExpressionType::OPERATOR_IS_NULL
+                ? SimplestExprType::NullType
+                : SimplestExprType::NonNullType;
+        return std::make_unique<SimplestIsNullExpr>(null_type,
+                                                    std::move(attr));
+      }
+    }
+  }
+
+  if (expr->expression_class == duckdb::ExpressionClass::BOUND_CASE) {
+    auto &case_expr = expr->Cast<duckdb::BoundCaseExpression>();
+    std::vector<CaseWhenClause> when_clauses;
+    for (auto &check : case_expr.case_checks) {
+      auto when_expr = ConvertExprToAQPExpr(check.when_expr.get());
+      auto then_expr = ConvertExprToAQPExpr(check.then_expr.get());
+      when_clauses.push_back({std::move(when_expr), std::move(then_expr)});
+    }
+    auto else_expr = ConvertExprToAQPExpr(case_expr.else_expr.get());
+    return std::make_unique<SimplestCaseExpr>(
+        std::move(when_clauses), std::move(else_expr));
+  }
+
+  if (expr->expression_class == duckdb::ExpressionClass::BOUND_COMPARISON) {
+    auto &cmp = expr->Cast<duckdb::BoundComparisonExpression>();
+    auto *left_col = TryUnwrapCastToColumnRef(cmp.left.get());
+    if (left_col &&
+        cmp.right->expression_class == duckdb::ExpressionClass::BOUND_CONSTANT) {
+      auto left_attr = ConvertAttr(cmp.left);
+      auto &right_const = cmp.right->Cast<duckdb::BoundConstantExpression>();
+      auto right_cv = ConvertConstVar(right_const.value);
+      return std::make_unique<SimplestVarConstComparison>(
+          ConvertCompType(cmp.type), std::move(left_attr),
+          std::move(right_cv));
+    }
+    auto *right_col = TryUnwrapCastToColumnRef(cmp.right.get());
+    if (left_col && right_col) {
+      auto left_attr = ConvertAttr(cmp.left);
+      auto right_attr = ConvertAttr(cmp.right);
+      return std::make_unique<SimplestVarComparison>(
+          ConvertCompType(cmp.type), std::move(left_attr),
+          std::move(right_attr));
+    }
+    std::string op_name;
+    switch (cmp.type) {
+    case duckdb::ExpressionType::COMPARE_EQUAL: op_name = "="; break;
+    case duckdb::ExpressionType::COMPARE_NOTEQUAL: op_name = "!="; break;
+    case duckdb::ExpressionType::COMPARE_LESSTHAN: op_name = "<"; break;
+    case duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO: op_name = "<="; break;
+    case duckdb::ExpressionType::COMPARE_GREATERTHAN: op_name = ">"; break;
+    case duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO: op_name = ">="; break;
+    default: op_name = "??"; break;
+    }
+    auto left = ConvertExprToAQPExpr(cmp.left.get());
+    auto right = ConvertExprToAQPExpr(cmp.right.get());
+    std::vector<std::unique_ptr<AQPExpr>> args;
+    args.push_back(std::move(left));
+    args.push_back(std::move(right));
+    return std::make_unique<SimplestFunctionExpr>(
+        "__infix_" + op_name, std::move(args));
+  }
+
+  if (expr->expression_class == duckdb::ExpressionClass::BOUND_CONJUNCTION) {
+    auto &conj = expr->Cast<duckdb::BoundConjunctionExpression>();
+    std::string conj_name =
+        conj.type == duckdb::ExpressionType::CONJUNCTION_AND
+            ? "__infix_AND"
+            : "__infix_OR";
+    std::vector<std::unique_ptr<AQPExpr>> args;
+    for (auto &child : conj.children) {
+      args.push_back(ConvertExprToAQPExpr(child.get()));
+    }
+    return std::make_unique<SimplestFunctionExpr>(conj_name, std::move(args));
+  }
+
   throw std::runtime_error("DuckToIR unsupported: expression class " +
                            std::to_string(static_cast<int>(
                                expr->expression_class)) +
@@ -1122,8 +1348,20 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
       return ConvertExprToAQPExpr(expr.get());
     }
   }
-  case duckdb::ExpressionType::CASE_EXPR:
-    throw std::runtime_error("DuckToIR unsupported: CASE expression");
+  case duckdb::ExpressionType::CASE_EXPR: {
+    auto &case_expr = expr->Cast<duckdb::BoundCaseExpression>();
+    std::vector<CaseWhenClause> checks;
+    for (auto &check : case_expr.case_checks) {
+      CaseWhenClause clause;
+      clause.when_expr = ConvertExpr(check.when_expr);
+      clause.then_expr = ConvertExpr(check.then_expr);
+      checks.push_back(std::move(clause));
+    }
+    std::unique_ptr<AQPExpr> else_result =
+        case_expr.else_expr ? ConvertExpr(case_expr.else_expr) : nullptr;
+    return std::make_unique<SimplestCaseExpr>(std::move(checks),
+                                             std::move(else_result));
+  }
   case duckdb::ExpressionType::COMPARE_NOTEQUAL:
   case duckdb::ExpressionType::COMPARE_EQUAL:
   case duckdb::ExpressionType::COMPARE_GREATERTHAN:
@@ -1302,8 +1540,14 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
     return unique_ptr_cast<SimplestLogicalExpr, AQPExpr>(
         std::move(simplest_not_expr));
   }
-  case duckdb::ExpressionType::OPERATOR_COALESCE:
-    throw std::runtime_error("DuckToIR unsupported: COALESCE expression");
+  case duckdb::ExpressionType::OPERATOR_COALESCE: {
+    auto &op_expr = expr->Cast<duckdb::BoundOperatorExpression>();
+    std::vector<std::unique_ptr<AQPExpr>> args;
+    for (const auto &child : op_expr.children) {
+      args.push_back(ConvertExpr(child));
+    }
+    return std::make_unique<SimplestFunctionExpr>("COALESCE", std::move(args));
+  }
   case duckdb::ExpressionType::BOUND_COLUMN_REF: {
 #ifdef DEBUG
     D_ASSERT(ExpressionType::BOUND_COLUMN_REF == expr->type);
@@ -1320,7 +1564,8 @@ DuckToIR::ConvertExpr(const duckdb::unique_ptr<duckdb::Expression> &expr) {
     auto simplest_attr = std::make_unique<SimplestAttr>(
         ConvertVarType(column_ref_expr.return_type),
         column_ref_expr.binding.table_index, actual_column_idx,
-        actual_column_name);
+        actual_column_name,
+        GetPhysicalBitWidth(column_ref_expr.return_type));
     auto simplest_attr_expr =
         std::make_unique<SimplestSingleAttrExpr>(std::move(simplest_attr));
     return unique_ptr_cast<SimplestSingleAttrExpr, AQPExpr>(

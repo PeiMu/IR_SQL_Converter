@@ -72,12 +72,56 @@ std::string IRToSQLConverter::ConvertSimplestIRToSQL(AQPStmt &plan) {
   }
 
   if (!group_by_field.empty()) {
-    sql_code += "\nGROUP BY\n";
-    for (const auto &group : group_by_field) {
-      sql_code += group;
-      sql_code += ",\n";
+    if (!grouping_sets.empty()) {
+      size_t n = group_by_field.size();
+      bool is_rollup = true;
+      if (grouping_sets.size() == n + 1) {
+        for (size_t i = 0; i <= n; i++) {
+          std::set<idx_t> expected;
+          for (idx_t j = 0; j < static_cast<idx_t>(i); j++)
+            expected.insert(j);
+          if (grouping_sets[i] != expected) {
+            is_rollup = false;
+            break;
+          }
+        }
+      } else {
+        is_rollup = false;
+      }
+      if (is_rollup) {
+        sql_code += "\nGROUP BY ROLLUP(";
+        for (size_t i = 0; i < group_by_field.size(); i++) {
+          if (i > 0)
+            sql_code += ", ";
+          sql_code += group_by_field[i];
+        }
+        sql_code += ")";
+      } else {
+        sql_code += "\nGROUP BY GROUPING SETS(";
+        for (size_t i = 0; i < grouping_sets.size(); i++) {
+          if (i > 0)
+            sql_code += ", ";
+          sql_code += "(";
+          bool first_col = true;
+          for (auto idx : grouping_sets[i]) {
+            if (!first_col)
+              sql_code += ", ";
+            if (idx < group_by_field.size())
+              sql_code += group_by_field[idx];
+            first_col = false;
+          }
+          sql_code += ")";
+        }
+        sql_code += ")";
+      }
+    } else {
+      sql_code += "\nGROUP BY\n";
+      for (const auto &group : group_by_field) {
+        sql_code += group;
+        sql_code += ",\n";
+      }
+      sql_code.erase(sql_code.size() - 2);
     }
-    sql_code.erase(sql_code.size() - 2);
   }
 
   if (!order_by_field.empty()) {
@@ -158,12 +202,15 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
             auto agg_fn_type_enum = agg_op.agg_fns[agg_fn_index].second;
             std::string agg_fn_type =
                 TranslateSimplestAggFnType(agg_fn_type_enum);
+            bool is_distinct = agg_fn_index < agg_op.agg_distinct.size() &&
+                               agg_op.agg_distinct[agg_fn_index];
             if (agg_fn_type_enum == SimplestAggFnType::CountStar) {
-              std::string select_str = "count(*)";
+              std::string select_str =
+                  is_distinct ? "count(DISTINCT *)" : "count(*)";
               alias_name = "count_star";
               select_str += " AS " + alias_name;
               select_field.emplace_back(select_str);
-            } else {
+            } else if (agg_op.agg_fns[agg_fn_index].first) {
               unsigned int table_idx =
                   agg_op.agg_fns[agg_fn_index].first->GetTableIndex();
               proj_table_to_real_table.emplace(
@@ -178,14 +225,32 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
               std::string actual_col_name =
                   GetActualColumnName(table_idx, col_idx, orig_col_name);
               std::string select_str = table_name + "." + actual_col_name;
+<<<<<<< HEAD
               select_str = agg_fn_type + "(" + select_str + ")";
               alias_name = TruncateIdentifier(table_names[table_idx] + "_" +
                            std::to_string(table_idx) + "_" + orig_col_name);
+=======
+              std::string dist_prefix = is_distinct ? "DISTINCT " : "";
+              select_str = agg_fn_type + "(" + dist_prefix + select_str + ")";
+              alias_name = table_names[table_idx] + "_" +
+                           std::to_string(table_idx) + "_" + orig_col_name;
+>>>>>>> 28c15901b8b945f86aae5078a4b5b9e4f21e8b98
+              select_str += " AS " + alias_name;
+              select_field.emplace_back(select_str);
+            } else if (agg_fn_index < agg_op.agg_fn_exprs.size() &&
+                       agg_op.agg_fn_exprs[agg_fn_index]) {
+              std::string expr_str =
+                  CollectFilter(agg_op.agg_fn_exprs[agg_fn_index]);
+              std::string dist_prefix = is_distinct ? "DISTINCT " : "";
+              std::string select_str =
+                  agg_fn_type + "(" + dist_prefix + expr_str + ")";
+              alias_name = "agg_expr_" + std::to_string(agg_fn_index);
               select_str += " AS " + alias_name;
               select_field.emplace_back(select_str);
             }
           } else if (target_table_index == agg_op.GetGroupIndex()) {
             unsigned int col_idx = target->GetColumnIndex();
+<<<<<<< HEAD
             unsigned int table_idx = group_by_vec[col_idx]->GetTableIndex();
             proj_table_to_real_table.emplace(
                 std::make_pair(target->GetTableIndex(),
@@ -201,6 +266,30 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
                          std::to_string(table_idx) + "_" + orig_col_name);
             select_str += " AS " + alias_name;
             select_field.emplace_back(select_str);
+=======
+            if (col_idx < group_exprs_vec.size() && group_exprs_vec[col_idx]) {
+              std::string expr_str = CollectFilter(group_exprs_vec[col_idx]);
+              alias_name = "grp_expr_" + std::to_string(col_idx);
+              std::string select_str = expr_str + " AS " + alias_name;
+              select_field.emplace_back(select_str);
+            } else {
+              unsigned int table_idx = group_by_vec[col_idx]->GetTableIndex();
+              proj_table_to_real_table.emplace(
+                  std::make_pair(target->GetTableIndex(),
+                                 target->GetColumnIndex()),
+                  table_idx);
+              auto table_name =
+                  table_names[table_idx] + "_" + std::to_string(table_idx);
+              orig_col_name = group_by_vec[col_idx]->GetColumnName();
+              std::string actual_col_name =
+                  GetActualColumnName(table_idx, col_idx, orig_col_name);
+              std::string select_str = table_name + "." + actual_col_name;
+              alias_name = table_names[table_idx] + "_" +
+                           std::to_string(table_idx) + "_" + orig_col_name;
+              select_str += " AS " + alias_name;
+              select_field.emplace_back(select_str);
+            }
+>>>>>>> 28c15901b8b945f86aae5078a4b5b9e4f21e8b98
           } else {
             throw std::runtime_error(
                 "IRToSQL unsupported: projection binding table " +
@@ -246,12 +335,16 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
       if (agg_fn.second == SimplestAggFnType::CountStar) {
         continue;
       }
-      agg_field.emplace(agg_field_key(agg_fn.first->GetTableIndex(),
-                                      agg_fn.first->GetColumnIndex()),
-                        TranslateSimplestAggFnType(agg_fn.second));
+      if (agg_fn.first) {
+        agg_field.emplace(agg_field_key(agg_fn.first->GetTableIndex(),
+                                        agg_fn.first->GetColumnIndex()),
+                          TranslateSimplestAggFnType(agg_fn.second));
+      }
     }
     if (!agg_op.groups.empty()) {
       group_by_vec = std::move(agg_op.groups);
+      group_exprs_vec = std::move(agg_op.group_exprs);
+      grouping_sets = std::move(agg_op.grouping_sets);
     }
 
     // Process target_list if present (for SELECT clause with aggregates)
@@ -286,21 +379,45 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
     // Build group_by_field from groups when no Projection above
     if (group_by_field.empty() && !group_by_vec.empty()) {
       bool target_list_covered = !agg_op.target_list.empty();
-      for (const auto &grp : group_by_vec) {
-        auto tbl = grp->GetTableIndex();
-        if (table_names.find(tbl) == table_names.end())
-          continue;
-        std::string col_str = table_names[tbl] + "_" +
-                              std::to_string(tbl) + "." +
-                              grp->GetColumnName();
-        group_by_field.emplace_back(col_str);
-        if (!target_list_covered) {
-          select_field.emplace_back(col_str);
+      for (size_t gi = 0; gi < group_by_vec.size(); gi++) {
+        auto &grp = group_by_vec[gi];
+        if (gi < group_exprs_vec.size() && group_exprs_vec[gi]) {
+          std::string expr_str = CollectFilter(group_exprs_vec[gi]);
+          group_by_field.emplace_back(expr_str);
+          if (!target_list_covered)
+            select_field.emplace_back(expr_str);
+        } else {
+          auto tbl = grp->GetTableIndex();
+          if (table_names.find(tbl) == table_names.end())
+            continue;
+          std::string col_str = table_names[tbl] + "_" +
+                                std::to_string(tbl) + "." +
+                                grp->GetColumnName();
+          group_by_field.emplace_back(col_str);
+          if (!target_list_covered) {
+            select_field.emplace_back(col_str);
+          }
         }
       }
-      for (const auto &agg_fn : agg_op.agg_fns) {
+      for (size_t fi = 0; fi < agg_op.agg_fns.size(); fi++) {
+        auto &agg_fn = agg_op.agg_fns[fi];
+        bool dist = fi < agg_op.agg_distinct.size() && agg_op.agg_distinct[fi];
+        std::string dist_prefix = dist ? "DISTINCT " : "";
         if (agg_fn.second == SimplestAggFnType::CountStar) {
-          select_field.emplace_back("count(*)");
+          select_field.emplace_back(dist ? "count(DISTINCT *)" : "count(*)");
+        } else if (agg_fn.first) {
+          auto tbl = agg_fn.first->GetTableIndex();
+          if (table_names.find(tbl) != table_names.end()) {
+            std::string fn_name = TranslateSimplestAggFnType(agg_fn.second);
+            std::string col_str = table_names[tbl] + "_" +
+                                  std::to_string(tbl) + "." +
+                                  agg_fn.first->GetColumnName();
+            select_field.emplace_back(fn_name + "(" + dist_prefix + col_str + ")");
+          }
+        } else if (fi < agg_op.agg_fn_exprs.size() && agg_op.agg_fn_exprs[fi]) {
+          std::string fn_name = TranslateSimplestAggFnType(agg_fn.second);
+          std::string expr_str = CollectFilter(agg_op.agg_fn_exprs[fi]);
+          select_field.emplace_back(fn_name + "(" + dist_prefix + expr_str + ")");
         }
       }
     }
@@ -487,7 +604,8 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
       break;
     }
     case Left:
-    case Right: {
+    case Right:
+    case Full: {
       std::string on_clause;
       std::unordered_set<unsigned int> right_tables;
       for (const auto &cond : conditions) {
@@ -520,14 +638,54 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
         on_clause += rt + "." + rc;
         right_tables.insert(ra->GetTableIndex());
       }
-      std::string join_keyword =
-          (join_type == Left) ? " LEFT JOIN " : " RIGHT JOIN ";
+      std::string join_keyword;
+      if (join_type == Left)
+        join_keyword = " LEFT JOIN ";
+      else if (join_type == Right)
+        join_keyword = " RIGHT JOIN ";
+      else
+        join_keyword = " FULL OUTER JOIN ";
       for (auto rt_idx : right_tables) {
         auto rt_name = table_names[rt_idx];
         auto rt_alias = rt_name + "_" + std::to_string(rt_idx);
         outer_join_clauses.push_back(join_keyword + rt_name + " AS " +
                                      rt_alias + " ON " + on_clause);
         outer_join_tables.insert(rt_idx);
+      }
+      break;
+    }
+    case Anti: {
+      for (const auto &cond : conditions) {
+        auto &var_comp = cond->Cast<SimplestVarComparison>();
+        auto &left_var_attr = var_comp.left_attr;
+        auto table_name = table_names[left_var_attr->GetTableIndex()] + "_" +
+                          std::to_string(left_var_attr->GetTableIndex());
+        std::string orig_col = left_var_attr->GetColumnName();
+        unsigned int col_idx = left_var_attr->GetColumnIndex();
+        unsigned int table_idx = left_var_attr->GetTableIndex();
+        std::string actual_col =
+            GetActualColumnName(table_idx, col_idx, orig_col);
+        auto filter_str = table_name + "." + actual_col;
+
+        auto &right_var_attr = var_comp.right_attr;
+        auto chunk_contents_str =
+            chunk_contents[right_var_attr->GetTableIndex()];
+        if (chunk_contents_str.size() > 1) {
+          filter_str += " NOT IN ";
+          filter_str += "(";
+          for (const auto &content : chunk_contents_str) {
+            std::string content_str = "'" + content + "', ";
+            filter_str += content_str;
+          }
+          filter_str.erase(filter_str.size() - 2);
+          filter_str += ")";
+        } else if (!chunk_contents_str.empty()) {
+          filter_str += " != '";
+          filter_str += chunk_contents_str[0];
+          filter_str += "'";
+        }
+
+        filter_field.emplace_back(filter_str);
       }
       break;
     }
@@ -634,6 +792,9 @@ IRToSQLConverter::TranslateSimplestAggFnType(SimplestAggFnType agg_fn_type) {
     break;
   case SimplestAggFnType::CountStar:
     agg_fn_type_str = "count";
+    break;
+  case SimplestAggFnType::StddevSamp:
+    agg_fn_type_str = "stddev_samp";
     break;
   }
 
@@ -993,6 +1154,33 @@ std::string IRToSQLConverter::CollectFilter(
   }
   case SimplestNodeType::FunctionExprNodeType: {
     auto &fn = qual_expr->Cast<SimplestFunctionExpr>();
+    if (fn.fn_name.rfind("__infix_", 0) == 0 && fn.args.size() == 2) {
+      std::string op = fn.fn_name.substr(8);
+      ret_str = "(";
+      if (fn.args[0]) ret_str += CollectFilter(fn.args[0]);
+      ret_str += " " + op + " ";
+      if (fn.args[1]) ret_str += CollectFilter(fn.args[1]);
+      ret_str += ")";
+      return ret_str;
+    }
+    if (fn.fn_name == "__infix_AND" || fn.fn_name == "__infix_OR") {
+      std::string op = fn.fn_name == "__infix_AND" ? " AND " : " OR ";
+      ret_str = "(";
+      for (size_t i = 0; i < fn.args.size(); i++) {
+        if (i > 0) ret_str += op;
+        if (fn.args[i]) ret_str += CollectFilter(fn.args[i]);
+      }
+      ret_str += ")";
+      return ret_str;
+    }
+    if (fn.fn_name == "||" && fn.args.size() == 2) {
+      ret_str = "(";
+      if (fn.args[0]) ret_str += CollectFilter(fn.args[0]);
+      ret_str += " || ";
+      if (fn.args[1]) ret_str += CollectFilter(fn.args[1]);
+      ret_str += ")";
+      return ret_str;
+    }
     ret_str = fn.fn_name + "(";
     for (size_t i = 0; i < fn.args.size(); i++) {
       if (i > 0)
@@ -1001,6 +1189,24 @@ std::string IRToSQLConverter::CollectFilter(
         ret_str += CollectFilter(fn.args[i]);
     }
     ret_str += ")";
+    return ret_str;
+  }
+  case SimplestNodeType::CaseExprNodeType: {
+    auto &ce = qual_expr->Cast<SimplestCaseExpr>();
+    ret_str = "CASE";
+    for (auto &check : ce.case_checks) {
+      ret_str += " WHEN ";
+      if (check.when_expr)
+        ret_str += CollectFilter(check.when_expr);
+      ret_str += " THEN ";
+      if (check.then_expr)
+        ret_str += CollectFilter(check.then_expr);
+    }
+    if (ce.else_expr) {
+      ret_str += " ELSE ";
+      ret_str += CollectFilter(ce.else_expr);
+    }
+    ret_str += " END";
     return ret_str;
   }
   default:

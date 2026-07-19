@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <iostream>
 #include <memory>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -43,7 +44,7 @@ enum SimplestLogicalOp {
   LogicalNot
 };
 enum SimplestTextOrder { InvalidTextOrder = 0, DefaultTextOrder, UTF8, C };
-enum SimplestAggFnType { InvalidAggType = 0, Min, Max, Sum, Average, Count, CountStar };
+enum SimplestAggFnType { InvalidAggType = 0, Min, Max, Sum, Average, Count, CountStar, StddevSamp };
 enum SimplestArithOp { ArithInvalid = 0, ArithAdd, ArithSub, ArithMul, ArithDiv, ArithMod };
 enum SimplestOrderType { INVALID = 0, ORDER_DEFAULT, Ascending, Descending };
 enum SimplestLimitType {
@@ -103,7 +104,8 @@ enum SimplestNodeType {
   HashNode,
   SortNode,
   RawSQLNode,
-  FunctionExprNodeType
+  FunctionExprNodeType,
+  CaseExprNodeType
 };
 
 class AQPNode {
@@ -940,6 +942,36 @@ public:
   std::vector<std::unique_ptr<AQPExpr>> args;
 };
 
+struct CaseWhenClause {
+  std::unique_ptr<AQPExpr> when_expr;
+  std::unique_ptr<AQPExpr> then_expr;
+};
+
+class SimplestCaseExpr : public AQPExpr {
+public:
+  SimplestCaseExpr(std::vector<CaseWhenClause> checks,
+                   std::unique_ptr<AQPExpr> else_expr)
+      : AQPExpr(SimplestExprType::FunctionExpr, CaseExprNodeType),
+        case_checks(std::move(checks)), else_expr(std::move(else_expr)) {}
+
+  SimplestCaseExpr(const SimplestCaseExpr &) = delete;
+  SimplestCaseExpr &operator=(const SimplestCaseExpr &) = delete;
+  ~SimplestCaseExpr() override = default;
+
+  std::string Print(bool print = true, int depth = 0) override {
+    std::string s = "CASE ";
+    for (auto &c : case_checks) {
+      s += "WHEN ... THEN ... ";
+    }
+    s += "END";
+    if (print) std::cout << s << std::endl;
+    return s;
+  }
+
+  std::vector<CaseWhenClause> case_checks;
+  std::unique_ptr<AQPExpr> else_expr;
+};
+
 // Wraps a SimplestConstVar so it can appear as an AQPExpr child
 // (e.g., inside SimplestArithExpr for "col - INTERVAL '120 days'").
 class SimplestConstExpr : public AQPExpr {
@@ -1190,11 +1222,17 @@ public:
       case SimplestAggFnType::CountStar:
         str += "count(";
         break;
+      case SimplestAggFnType::StddevSamp:
+        str += "stddev_samp(";
+        break;
       }
+      auto idx = static_cast<size_t>(&agg_fn - &agg_fns[0]);
       if (agg_fn.second == SimplestAggFnType::CountStar)
         str += "*";
-      else
+      else if (agg_fn.first)
         str += agg_fn.first->Print(false);
+      else if (idx < agg_fn_exprs.size() && agg_fn_exprs[idx])
+        str += "expr";
       str += ")";
     }
     str += "]";
@@ -1224,7 +1262,13 @@ public:
   unsigned int GetGroupIndex() const { return group_index; }
 
   agg_fn_pair agg_fns;
+  std::vector<std::unique_ptr<AQPExpr>> agg_fn_exprs;
+  std::vector<bool> agg_distinct;
   std::vector<std::unique_ptr<SimplestAttr>> groups;
+  std::vector<std::unique_ptr<AQPExpr>> group_exprs;
+  // ROLLUP/CUBE/GROUPING SETS: each inner set holds indices into `groups`.
+  // Empty vector means plain GROUP BY.
+  std::vector<std::set<idx_t>> grouping_sets;
 
 private:
   //! these are only used for DuckDB
