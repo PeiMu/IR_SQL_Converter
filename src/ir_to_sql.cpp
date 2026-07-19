@@ -225,16 +225,10 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
               std::string actual_col_name =
                   GetActualColumnName(table_idx, col_idx, orig_col_name);
               std::string select_str = table_name + "." + actual_col_name;
-<<<<<<< HEAD
-              select_str = agg_fn_type + "(" + select_str + ")";
-              alias_name = TruncateIdentifier(table_names[table_idx] + "_" +
-                           std::to_string(table_idx) + "_" + orig_col_name);
-=======
               std::string dist_prefix = is_distinct ? "DISTINCT " : "";
               select_str = agg_fn_type + "(" + dist_prefix + select_str + ")";
-              alias_name = table_names[table_idx] + "_" +
-                           std::to_string(table_idx) + "_" + orig_col_name;
->>>>>>> 28c15901b8b945f86aae5078a4b5b9e4f21e8b98
+              alias_name = TruncateIdentifier(table_names[table_idx] + "_" +
+                           std::to_string(table_idx) + "_" + orig_col_name);
               select_str += " AS " + alias_name;
               select_field.emplace_back(select_str);
             } else if (agg_fn_index < agg_op.agg_fn_exprs.size() &&
@@ -250,23 +244,6 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
             }
           } else if (target_table_index == agg_op.GetGroupIndex()) {
             unsigned int col_idx = target->GetColumnIndex();
-<<<<<<< HEAD
-            unsigned int table_idx = group_by_vec[col_idx]->GetTableIndex();
-            proj_table_to_real_table.emplace(
-                std::make_pair(target->GetTableIndex(),
-                               target->GetColumnIndex()),
-                table_idx);
-            auto table_name =
-                table_names[table_idx] + "_" + std::to_string(table_idx);
-            orig_col_name = group_by_vec[col_idx]->GetColumnName();
-            std::string actual_col_name =
-                GetActualColumnName(table_idx, col_idx, orig_col_name);
-            std::string select_str = table_name + "." + actual_col_name;
-            alias_name = TruncateIdentifier(table_names[table_idx] + "_" +
-                         std::to_string(table_idx) + "_" + orig_col_name);
-            select_str += " AS " + alias_name;
-            select_field.emplace_back(select_str);
-=======
             if (col_idx < group_exprs_vec.size() && group_exprs_vec[col_idx]) {
               std::string expr_str = CollectFilter(group_exprs_vec[col_idx]);
               alias_name = "grp_expr_" + std::to_string(col_idx);
@@ -284,12 +261,11 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
               std::string actual_col_name =
                   GetActualColumnName(table_idx, col_idx, orig_col_name);
               std::string select_str = table_name + "." + actual_col_name;
-              alias_name = table_names[table_idx] + "_" +
-                           std::to_string(table_idx) + "_" + orig_col_name;
+              alias_name = TruncateIdentifier(table_names[table_idx] + "_" +
+                           std::to_string(table_idx) + "_" + orig_col_name);
               select_str += " AS " + alias_name;
               select_field.emplace_back(select_str);
             }
->>>>>>> 28c15901b8b945f86aae5078a4b5b9e4f21e8b98
           } else {
             throw std::runtime_error(
                 "IRToSQL unsupported: projection binding table " +
