@@ -159,9 +159,13 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node,
     auto table_index = UINT_MAX - sub_plan_id;
     result_tree =
         std::make_unique<SimplestProjection>(std::move(proj_base), table_index);
+    if (!expr_target_list_scratch_.empty())
+      result_tree->expr_target_list = std::move(expr_target_list_scratch_);
   } else {
     // No FROM clause - just a projection
-    std::cout << "Warning: No FROM clause - just a projection" << std::endl;
+#ifndef NDEBUG
+    std::cerr << "Warning: No FROM clause - just a projection" << std::endl;
+#endif
     std::vector<std::unique_ptr<AQPStmt>> empty_children;
     auto proj_base = std::make_unique<AQPStmt>(std::move(empty_children),
                                                     std::move(target_list),
@@ -171,11 +175,13 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node,
         std::make_unique<SimplestProjection>(std::move(proj_base), table_index);
   }
 
-  // Wrap in SimplestAggregate node if aggregate functions were found
-  if (!agg_functions.empty()) {
-    // The target list should be on the Aggregate node, not the child
+  bool has_group = select_node.contains("groupClause") &&
+                    !select_node["groupClause"].empty();
+  if (!agg_functions.empty() || has_group) {
     std::vector<std::unique_ptr<SimplestAttr>> saved_target_list =
         std::move(result_tree->target_list);
+    std::vector<std::unique_ptr<AQPExpr>> saved_expr_target_list =
+        std::move(result_tree->expr_target_list);
 
     std::vector<std::unique_ptr<AQPStmt>> agg_children;
     agg_children.push_back(std::move(result_tree));
@@ -183,9 +189,122 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node,
     auto agg_base = std::make_unique<AQPStmt>(std::move(agg_children),
                                                    std::move(saved_target_list),
                                                    SimplestNodeType::StmtNode);
+    if (!saved_expr_target_list.empty())
+      agg_base->expr_target_list = std::move(saved_expr_target_list);
 
     result_tree = std::make_unique<SimplestAggregate>(std::move(agg_base),
                                                       std::move(agg_functions));
+    if (!agg_fn_exprs_scratch_.empty()) {
+      auto *agg_ptr = static_cast<SimplestAggregate *>(result_tree.get());
+      agg_ptr->agg_fn_exprs = std::move(agg_fn_exprs_scratch_);
+    }
+
+    if (has_group) {
+      auto *agg = static_cast<SimplestAggregate *>(result_tree.get());
+      for (const auto &gc : select_node["groupClause"]) {
+        if (gc.contains("ColumnRef")) {
+          agg->groups.push_back(ConvertColumnRef(gc["ColumnRef"]));
+          agg->group_exprs.push_back(nullptr);
+        } else if (gc.contains("FuncCall") || gc.contains("A_Expr") ||
+                   gc.contains("TypeCast")) {
+          agg->groups.push_back(std::make_unique<SimplestAttr>(
+              SimplestVarType::StringVar, 0, 0, "grp_expr"));
+          agg->group_exprs.push_back(ConvertExpr(gc));
+        } else if (gc.contains("GroupingSet")) {
+          auto &gs = gc["GroupingSet"];
+          if (gs.contains("content")) {
+            for (const auto &item : gs["content"]) {
+              if (item.contains("ColumnRef"))
+                agg->groups.push_back(ConvertColumnRef(item["ColumnRef"]));
+            }
+          }
+          std::string kind = gs.contains("kind") && gs["kind"].is_string()
+                                 ? gs["kind"].get<std::string>()
+                                 : "";
+          if (kind == "GROUPING_SET_ROLLUP") {
+            size_t n = agg->groups.size();
+            for (size_t i = n;; --i) {
+              std::set<idx_t> s;
+              for (size_t j = 0; j < i; j++)
+                s.insert(j);
+              agg->grouping_sets.push_back(std::move(s));
+              if (i == 0)
+                break;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (select_node.contains("sortClause") &&
+      !select_node["sortClause"].empty()) {
+    std::vector<OrderStruct> orders;
+    for (const auto &sc : select_node["sortClause"]) {
+      if (!sc.contains("SortBy"))
+        continue;
+      auto &sb = sc["SortBy"];
+      SimplestOrderType ot = SimplestOrderType::ORDER_DEFAULT;
+      if (sb.contains("sortby_dir") && sb["sortby_dir"].is_string()) {
+        std::string dir = sb["sortby_dir"].get<std::string>();
+        if (dir == "SORTBY_ASC")
+          ot = SimplestOrderType::Ascending;
+        else if (dir == "SORTBY_DESC")
+          ot = SimplestOrderType::Descending;
+      }
+      std::unique_ptr<SimplestAttr> attr;
+      if (sb.contains("node") && sb["node"].contains("ColumnRef")) {
+        auto resolved = ConvertColumnRef(sb["node"]["ColumnRef"]);
+        unsigned int target_pos = 0;
+        for (size_t ti = 0; ti < target_list.size(); ti++) {
+          if (target_list[ti]->GetColumnName() ==
+              resolved->GetColumnName()) {
+            target_pos = static_cast<unsigned int>(ti);
+            break;
+          }
+        }
+        attr = std::make_unique<SimplestAttr>(
+            resolved->GetType(), resolved->GetTableIndex(), target_pos,
+            resolved->GetColumnName());
+      } else if (sb.contains("node") && sb["node"].contains("A_Const")) {
+        int pos = ConvertAConst(sb["node"]["A_Const"])->GetIntValue() - 1;
+        attr = std::make_unique<SimplestAttr>(SimplestVarType::IntVar, 0,
+                                              pos, "");
+      } else {
+        attr = std::make_unique<SimplestAttr>(SimplestVarType::IntVar, 0,
+                                              0, "");
+      }
+      orders.push_back({ot, std::move(attr)});
+    }
+    if (!orders.empty()) {
+      std::vector<std::unique_ptr<AQPStmt>> order_children;
+      order_children.push_back(std::move(result_tree));
+      auto order_base = std::make_unique<AQPStmt>(
+          std::move(order_children), SimplestNodeType::StmtNode);
+      result_tree = std::make_unique<SimplestOrderBy>(
+          std::move(order_base), std::move(orders));
+    }
+  }
+
+  if (select_node.contains("limitCount")) {
+    LimitVal lv{SimplestLimitType::CONSTANT_VALUE, 0};
+    if (select_node["limitCount"].contains("A_Const")) {
+      auto lc = ConvertAConst(select_node["limitCount"]["A_Const"]);
+      lv.val = static_cast<idx_t>(lc->GetIntValue());
+    }
+    LimitVal ov{SimplestLimitType::UNSET, 0};
+    if (select_node.contains("limitOffset") &&
+        select_node["limitOffset"].contains("A_Const")) {
+      auto lo = ConvertAConst(select_node["limitOffset"]["A_Const"]);
+      ov = {SimplestLimitType::CONSTANT_VALUE,
+            static_cast<idx_t>(lo->GetIntValue())};
+    }
+    std::vector<std::unique_ptr<AQPStmt>> limit_children;
+    limit_children.push_back(std::move(result_tree));
+    auto limit_base = std::make_unique<AQPStmt>(
+        std::move(limit_children), SimplestNodeType::StmtNode);
+    result_tree =
+        std::make_unique<SimplestLimit>(std::move(limit_base), lv, ov);
   }
 
   return result_tree;
@@ -228,27 +347,30 @@ ParseTreeToIR::ConvertFromClause(const json &from_list) {
 std::unique_ptr<AQPStmt>
 ParseTreeToIR::ConvertJoinExpr(const json &join_node) {
   // Convert left and right sides
-  auto left_tree = ConvertFromClause({join_node["larg"]});
-  auto right_tree = ConvertFromClause({join_node["rarg"]});
+  auto left_tree = ConvertFromClause(json::array({join_node["larg"]}));
+  auto right_tree = ConvertFromClause(json::array({join_node["rarg"]}));
 
   // Get join type
   SimplestJoinType join_type = SimplestJoinType::Inner;
   if (join_node.contains("jointype")) {
-    int join_type_val = join_node["jointype"];
-    // 0 = INNER, 1 = LEFT, 2 = FULL, 3 = RIGHT
-    switch (join_type_val) {
-    case 0:
-      join_type = SimplestJoinType::Inner;
-      break;
-    case 1:
-      join_type = SimplestJoinType::Left;
-      break;
-    case 2:
-      join_type = SimplestJoinType::Full;
-      break;
-    case 3:
-      join_type = SimplestJoinType::Right;
-      break;
+    if (join_node["jointype"].is_string()) {
+      std::string jt = join_node["jointype"];
+      if (jt == "JOIN_LEFT")
+        join_type = SimplestJoinType::Left;
+      else if (jt == "JOIN_FULL")
+        join_type = SimplestJoinType::Full;
+      else if (jt == "JOIN_RIGHT")
+        join_type = SimplestJoinType::Right;
+      else if (jt == "JOIN_INNER")
+        join_type = SimplestJoinType::Inner;
+    } else {
+      int join_type_val = join_node["jointype"];
+      switch (join_type_val) {
+      case 0: join_type = SimplestJoinType::Inner; break;
+      case 1: join_type = SimplestJoinType::Left; break;
+      case 2: join_type = SimplestJoinType::Full; break;
+      case 3: join_type = SimplestJoinType::Right; break;
+      }
     }
   }
 
@@ -256,14 +378,23 @@ ParseTreeToIR::ConvertJoinExpr(const json &join_node) {
   std::vector<std::unique_ptr<SimplestVarComparison>> join_conditions;
   if (join_node.contains("quals")) {
     auto qual_exprs = ConvertWhereClause(join_node["quals"]);
-    // Convert AQPExpr to SimplestVarComparison
-    for (auto &expr : qual_exprs) {
-      if (expr->GetNodeType() == SimplestNodeType::VarComparisonNode) {
-        auto var_comp = unique_ptr_cast<AQPExpr, SimplestVarComparison>(
-            std::move(expr));
-        join_conditions.emplace_back(std::move(var_comp));
-      }
-    }
+    std::function<void(std::unique_ptr<AQPExpr>)> extract =
+        [&](std::unique_ptr<AQPExpr> expr) {
+          if (!expr) return;
+          if (expr->GetNodeType() == SimplestNodeType::VarComparisonNode) {
+            join_conditions.emplace_back(
+                unique_ptr_cast<AQPExpr, SimplestVarComparison>(
+                    std::move(expr)));
+          } else if (expr->GetNodeType() == SimplestNodeType::LogicalExprNode) {
+            auto &le = static_cast<SimplestLogicalExpr &>(*expr);
+            if (le.GetLogicalOp() == SimplestLogicalOp::LogicalAnd) {
+              extract(std::move(le.left_expr));
+              extract(std::move(le.right_expr));
+            }
+          }
+        };
+    for (auto &expr : qual_exprs)
+      extract(std::move(expr));
   }
 
   // Build join node
@@ -313,6 +444,10 @@ ParseTreeToIR::ConvertWhereClause(const json &where_node) {
     exprs.push_back(ConvertBoolExpr(where_node["BoolExpr"]));
   } else if (where_node.contains("NullTest")) {
     exprs.push_back(ConvertNullTest(where_node["NullTest"]));
+  } else if (where_node.contains("TypeCast")) {
+    exprs.push_back(ConvertTypeCast(where_node["TypeCast"]));
+  } else if (where_node.contains("FuncCall")) {
+    exprs.push_back(ConvertFuncCallExpr(where_node["FuncCall"]));
   }
 
   return exprs;
@@ -362,52 +497,87 @@ ParseTreeToIR::ConvertAExpr(const json &expr_node) {
           std::move(comparison));
     }
   } else if ("AEXPR_BETWEEN" == kind) {
-    // For BETWEEN expressions: convert to (column >= lower AND column <= upper)
     json left_node = expr_node["lexpr"];
     json right_node = expr_node["rexpr"];
 
-    if (!left_node.contains("ColumnRef") || !right_node.contains("List")) {
-      throw std::runtime_error("Unsupported BETWEEN expression format");
+    if (!right_node.contains("List") ||
+        right_node["List"]["items"].size() != 2) {
+      throw std::runtime_error("BETWEEN requires List with exactly 2 values");
     }
-
     auto list_items = right_node["List"]["items"];
-    if (list_items.size() != 2) {
-      throw std::runtime_error("BETWEEN requires exactly 2 values");
+
+    bool left_simple = left_node.contains("ColumnRef");
+    bool lower_simple = list_items[0].contains("A_Const");
+    bool upper_simple = list_items[1].contains("A_Const");
+
+    if (left_simple && lower_simple && upper_simple) {
+      auto attr1 = ConvertColumnRef(left_node["ColumnRef"]);
+      auto lower_const = ConvertAConst(list_items[0]["A_Const"]);
+      auto lower_cmp = std::make_unique<SimplestVarConstComparison>(
+          SimplestExprType::GreaterEqual, std::move(attr1),
+          std::move(lower_const));
+
+      auto attr2 = ConvertColumnRef(left_node["ColumnRef"]);
+      auto upper_const = ConvertAConst(list_items[1]["A_Const"]);
+      auto upper_cmp = std::make_unique<SimplestVarConstComparison>(
+          SimplestExprType::LessEqual, std::move(attr2),
+          std::move(upper_const));
+
+      result = std::make_unique<SimplestLogicalExpr>(
+          SimplestLogicalOp::LogicalAnd, std::move(lower_cmp),
+          std::move(upper_cmp));
+    } else {
+      auto left_expr1 = ConvertExpr(left_node);
+      auto left_expr2 = ConvertExpr(left_node);
+      auto lower_expr = ConvertExpr(list_items[0]);
+      auto upper_expr = ConvertExpr(list_items[1]);
+
+      std::unique_ptr<AQPExpr> lower_cmp, upper_cmp;
+      if (left_expr1 && lower_expr)
+        lower_cmp = std::make_unique<SimplestGeneralComparison>(
+            SimplestExprType::GreaterEqual, std::move(left_expr1),
+            std::move(lower_expr));
+      if (left_expr2 && upper_expr)
+        upper_cmp = std::make_unique<SimplestGeneralComparison>(
+            SimplestExprType::LessEqual, std::move(left_expr2),
+            std::move(upper_expr));
+
+      if (lower_cmp && upper_cmp)
+        result = std::make_unique<SimplestLogicalExpr>(
+            SimplestLogicalOp::LogicalAnd, std::move(lower_cmp),
+            std::move(upper_cmp));
+      else if (lower_cmp)
+        result = std::move(lower_cmp);
+      else if (upper_cmp)
+        result = std::move(upper_cmp);
     }
-
-    // Create: column >= lower_bound
-    auto attr1 = ConvertColumnRef(left_node["ColumnRef"]);
-    auto lower_const = ConvertAConst(list_items[0]["A_Const"]);
-    auto lower_comparison = std::make_unique<SimplestVarConstComparison>(
-        SimplestExprType::GreaterEqual, std::move(attr1),
-        std::move(lower_const));
-
-    // Create: column <= upper_bound
-    auto attr2 = ConvertColumnRef(left_node["ColumnRef"]);
-    auto upper_const = ConvertAConst(list_items[1]["A_Const"]);
-    auto upper_comparison = std::make_unique<SimplestVarConstComparison>(
-        SimplestExprType::LessEqual, std::move(attr2), std::move(upper_const));
-
-    // Combine with AND
-    result = std::make_unique<SimplestLogicalExpr>(
-        SimplestLogicalOp::LogicalAnd, std::move(lower_comparison),
-        std::move(upper_comparison));
   } else {
-    // For the others expressions, e.g., "Like", "=", ">", "<", etc.
-    // Get operator
     std::string op_name;
     if (expr_node.contains("name") && !expr_node["name"].empty()) {
       op_name = expr_node["name"][0]["String"]["sval"];
     }
 
+    SimplestArithOp arith_op = SimplestArithOp::ArithInvalid;
+    if (op_name == "+") arith_op = SimplestArithOp::ArithAdd;
+    else if (op_name == "-") arith_op = SimplestArithOp::ArithSub;
+    else if (op_name == "*") arith_op = SimplestArithOp::ArithMul;
+    else if (op_name == "/") arith_op = SimplestArithOp::ArithDiv;
+    else if (op_name == "%") arith_op = SimplestArithOp::ArithMod;
+
+    if (arith_op != SimplestArithOp::ArithInvalid) {
+      auto left_expr = ConvertExpr(expr_node["lexpr"]);
+      auto right_expr = ConvertExpr(expr_node["rexpr"]);
+      if (left_expr && right_expr)
+        result = std::make_unique<SimplestArithExpr>(
+            arith_op, std::move(left_expr), std::move(right_expr));
+      return result;
+    }
+
     SimplestExprType expr_type = ConvertToSimplestExprType(op_name);
 
-    // Get left and right operands
     json left_node = expr_node["lexpr"];
     json right_node = expr_node["rexpr"];
 
-    // Check if it's column-column comparison (VarComparison) or column-const
-    // (VarConstComparison)
     bool left_is_column = left_node.contains("ColumnRef");
     bool right_is_column = right_node.contains("ColumnRef");
     bool right_is_const = right_node.contains("A_Const");
@@ -427,9 +597,11 @@ ParseTreeToIR::ConvertAExpr(const json &expr_node) {
       result = std::make_unique<SimplestVarConstComparison>(
           expr_type, std::move(attr), std::move(const_var));
     } else {
-      std::cout << "Warning: unsupported in ConvertAExpr. left_is_column: "
-                << left_is_column << ", right_is_column: " << right_is_column
-                << ", right_is_const: " << right_is_const << "." << std::endl;
+      auto left_expr = ConvertExpr(left_node);
+      auto right_expr = ConvertExpr(right_node);
+      if (left_expr && right_expr)
+        result = std::make_unique<SimplestGeneralComparison>(
+            expr_type, std::move(left_expr), std::move(right_expr));
     }
   }
 
@@ -526,6 +698,30 @@ ParseTreeToIR::ConvertTargetList(const json &target_list) {
       auto attr = ConvertResTarget(target["ResTarget"]);
       if (attr) {
         attrs.push_back(std::move(attr));
+        expr_target_list_scratch_.push_back(nullptr);
+      } else if (target["ResTarget"].contains("val") &&
+                 target["ResTarget"]["val"].contains("FuncCall")) {
+        auto &fc = target["ResTarget"]["val"]["FuncCall"];
+        std::string fn;
+        if (fc.contains("funcname") && !fc["funcname"].empty()) {
+          fn = fc["funcname"][0]["String"]["sval"];
+          for (auto &c : fn) c = std::toupper(c);
+        }
+        if (GetAggFnType(fn) == SimplestAggFnType::InvalidAggType) {
+          auto expr = ConvertResTargetExpr(target["ResTarget"]);
+          if (expr) {
+            attrs.push_back(std::make_unique<SimplestAttr>(
+                SimplestVarType::StringVar, 0, 0, "expr"));
+            expr_target_list_scratch_.push_back(std::move(expr));
+          }
+        }
+      } else {
+        auto expr = ConvertResTargetExpr(target["ResTarget"]);
+        if (expr) {
+          attrs.push_back(std::make_unique<SimplestAttr>(
+              SimplestVarType::StringVar, 0, 0, "expr"));
+          expr_target_list_scratch_.push_back(std::move(expr));
+        }
       }
     }
   }
@@ -557,23 +753,50 @@ ParseTreeToIR::ConvertResTarget(const json &res_target) {
       SimplestAggFnType agg_type = GetAggFnType(func_name);
 
       if (agg_type != SimplestAggFnType::InvalidAggType &&
-          func_call.contains("args") && !func_call["args"].empty()) {
+          func_call.contains("agg_star") && func_call["agg_star"] == true) {
+        if (!table_names.empty()) {
+          std::string tname = table_names[0];
+          unsigned int tidx = table_index_map[tname];
+          auto attr_star = std::make_unique<SimplestAttr>(
+              SimplestVarType::IntVar, tidx, 0, "*");
+          agg_functions.emplace_back(std::move(attr_star),
+                                     SimplestAggFnType::CountStar);
+          agg_fn_exprs_scratch_.push_back(nullptr);
+        }
+      } else if (agg_type != SimplestAggFnType::InvalidAggType &&
+                 func_call.contains("args") && !func_call["args"].empty()) {
         json first_arg = func_call["args"][0];
         if (first_arg.contains("ColumnRef")) {
           result = ConvertColumnRef(first_arg["ColumnRef"]);
-          // Store aggregate function for later processing
           auto attr_copy = std::make_unique<SimplestAttr>(*result);
           agg_functions.emplace_back(std::move(attr_copy), agg_type);
+          agg_fn_exprs_scratch_.push_back(nullptr);
+        } else if (first_arg.contains("TypeCast")) {
+          json cast_arg = first_arg["TypeCast"]["arg"];
+          if (cast_arg.contains("ColumnRef")) {
+            result = ConvertColumnRef(cast_arg["ColumnRef"]);
+            auto attr_copy = std::make_unique<SimplestAttr>(*result);
+            agg_functions.emplace_back(std::move(attr_copy), agg_type);
+            agg_fn_exprs_scratch_.push_back(nullptr);
+          }
+        } else {
+          auto arg_expr = ConvertExpr(first_arg);
+          if (arg_expr) {
+            agg_functions.emplace_back(nullptr, agg_type);
+            agg_fn_exprs_scratch_.push_back(std::move(arg_expr));
+          }
         }
-      } else {
-        // If no args or unsupported format, skip this target
-        std::cout << "Warning: FuncCall without column argument, skipping"
-                  << std::endl;
-        return nullptr;
       }
     }
   }
   return result;
+}
+
+std::unique_ptr<AQPExpr>
+ParseTreeToIR::ConvertResTargetExpr(const json &res_target) {
+  if (!res_target.contains("val"))
+    return nullptr;
+  return ConvertExpr(res_target["val"]);
 }
 
 std::unique_ptr<SimplestAttr>
@@ -585,10 +808,25 @@ ParseTreeToIR::ConvertColumnRef(const json &col_ref) {
   std::string column_name;
 
   if (fields.size() == 1) {
-    // Just column name (e.g., "id")
     column_name = fields[0]["String"]["sval"];
-    // Infer table from context (use first table for now)
-    if (!table_names.empty()) {
+    bool found = false;
+    for (const auto &tname : table_names) {
+      std::string resolved = ResolveTableName(tname);
+      if (schema_parser_ &&
+          schema_parser_->GetColumnIndex(resolved, column_name) >= 0) {
+        table_identifier = tname;
+        actual_table_name = resolved;
+        found = true;
+        break;
+      } else if (column_index_lookup_ &&
+                 column_index_lookup_(resolved, column_name) >= 0) {
+        table_identifier = tname;
+        actual_table_name = resolved;
+        found = true;
+        break;
+      }
+    }
+    if (!found && !table_names.empty()) {
       table_identifier = table_names[0];
       actual_table_name = ResolveTableName(table_identifier);
     }
@@ -627,8 +865,10 @@ ParseTreeToIR::ConvertColumnRef(const json &col_ref) {
 std::unique_ptr<SimplestConstVar>
 ParseTreeToIR::ConvertAConst(const json &a_const) {
   if (a_const.contains("ival")) {
-    return std::make_unique<SimplestConstVar>(
-        a_const["ival"]["ival"].get<int>());
+    int val = 0;
+    if (a_const["ival"].contains("ival"))
+      val = a_const["ival"]["ival"].get<int>();
+    return std::make_unique<SimplestConstVar>(val);
   } else if (a_const.contains("fval")) {
     return std::make_unique<SimplestConstVar>(
         std::stof(a_const["fval"]["fval"].get<std::string>()));
@@ -640,7 +880,115 @@ ParseTreeToIR::ConvertAConst(const json &a_const) {
         a_const["boolval"]["boolval"].get<bool>());
   }
 
-  throw std::runtime_error("Unknown constant type");
+  return std::make_unique<SimplestConstVar>(std::string("NULL"));
+}
+
+std::unique_ptr<AQPExpr>
+ParseTreeToIR::ConvertExpr(const json &node) {
+  if (node.contains("A_Const")) {
+    auto cv = ConvertAConst(node["A_Const"]);
+    return std::make_unique<SimplestConstExpr>(std::move(cv));
+  }
+  if (node.contains("ColumnRef")) {
+    auto attr = ConvertColumnRef(node["ColumnRef"]);
+    return std::make_unique<SimplestSingleAttrExpr>(std::move(attr));
+  }
+  if (node.contains("A_Expr")) {
+    return ConvertAExpr(node["A_Expr"]);
+  }
+  if (node.contains("TypeCast")) {
+    return ConvertTypeCast(node["TypeCast"]);
+  }
+  if (node.contains("FuncCall")) {
+    return ConvertFuncCallExpr(node["FuncCall"]);
+  }
+  if (node.contains("BoolExpr")) {
+    return ConvertBoolExpr(node["BoolExpr"]);
+  }
+  if (node.contains("NullTest")) {
+    return ConvertNullTest(node["NullTest"]);
+  }
+  if (node.contains("CaseExpr")) {
+    auto &ce = node["CaseExpr"];
+    std::vector<CaseWhenClause> checks;
+    if (ce.contains("args")) {
+      for (const auto &arg : ce["args"]) {
+        if (!arg.contains("CaseWhen"))
+          continue;
+        auto &cw = arg["CaseWhen"];
+        CaseWhenClause clause;
+        if (cw.contains("expr"))
+          clause.when_expr = ConvertExpr(cw["expr"]);
+        if (cw.contains("result"))
+          clause.then_expr = ConvertExpr(cw["result"]);
+        checks.push_back(std::move(clause));
+      }
+    }
+    std::unique_ptr<AQPExpr> else_expr;
+    if (ce.contains("defresult"))
+      else_expr = ConvertExpr(ce["defresult"]);
+    return std::make_unique<SimplestCaseExpr>(std::move(checks),
+                                              std::move(else_expr));
+  }
+  if (node.contains("CoalesceExpr")) {
+    auto &ce = node["CoalesceExpr"];
+    std::vector<std::unique_ptr<AQPExpr>> args;
+    if (ce.contains("args")) {
+      for (const auto &arg : ce["args"])
+        args.push_back(ConvertExpr(arg));
+    }
+    return std::make_unique<SimplestFunctionExpr>("coalesce", std::move(args));
+  }
+  return nullptr;
+}
+
+std::unique_ptr<AQPExpr>
+ParseTreeToIR::ConvertTypeCast(const json &typecast_node) {
+  auto child = ConvertExpr(typecast_node["arg"]);
+  if (!child)
+    return nullptr;
+
+  SimplestVarType target_type = SimplestVarType::StringVar;
+  if (typecast_node.contains("typeName") &&
+      typecast_node["typeName"].contains("names") &&
+      !typecast_node["typeName"]["names"].empty()) {
+    auto &names = typecast_node["typeName"]["names"];
+    std::string type_name = names.back()["String"]["sval"];
+    if (type_name == "date")
+      target_type = SimplestVarType::Date;
+    else if (type_name == "interval")
+      target_type = SimplestVarType::IntervalVar;
+    else if (type_name == "timestamp")
+      target_type = SimplestVarType::TimestampVar;
+    else if (type_name == "int4" || type_name == "int8" ||
+             type_name == "int2" || type_name == "integer")
+      target_type = SimplestVarType::IntVar;
+    else if (type_name == "float8" || type_name == "float4" ||
+             type_name == "numeric" || type_name == "decimal")
+      target_type = SimplestVarType::FloatVar;
+    else if (type_name == "bool")
+      target_type = SimplestVarType::BoolVar;
+  }
+  return std::make_unique<SimplestCastExpr>(std::move(child), target_type);
+}
+
+std::unique_ptr<AQPExpr>
+ParseTreeToIR::ConvertFuncCallExpr(const json &func_call) {
+  std::string func_name;
+  if (func_call.contains("funcname") && !func_call["funcname"].empty()) {
+    func_name = func_call["funcname"].back()["String"]["sval"];
+  }
+
+  std::vector<std::unique_ptr<AQPExpr>> args;
+  if (func_call.contains("args")) {
+    for (const auto &arg : func_call["args"]) {
+      auto expr = ConvertExpr(arg);
+      if (expr)
+        args.push_back(std::move(expr));
+    }
+  }
+  return std::make_unique<SimplestFunctionExpr>(std::move(func_name),
+                                                std::move(args));
 }
 
 SimplestVarType
@@ -742,6 +1090,10 @@ SimplestAggFnType ParseTreeToIR::GetAggFnType(const std::string &func_name) {
     return SimplestAggFnType::Sum;
   if (func_name == "AVG" || func_name == "AVERAGE")
     return SimplestAggFnType::Average;
+  if (func_name == "COUNT")
+    return SimplestAggFnType::Count;
+  if (func_name == "STDDEV_SAMP")
+    return SimplestAggFnType::StddevSamp;
   return SimplestAggFnType::InvalidAggType;
 }
 

@@ -53,6 +53,8 @@ public:
     table_names.clear();
     next_table_index = 0;
     agg_functions.clear();
+    agg_fn_exprs_scratch_.clear();
+    expr_target_list_scratch_.clear();
   }
 
 private:
@@ -76,12 +78,18 @@ private:
   std::vector<std::unique_ptr<SimplestAttr>>
   ConvertTargetList(const json &target_list);
   std::unique_ptr<SimplestAttr> ConvertResTarget(const json &res_target);
+  std::unique_ptr<AQPExpr> ConvertResTargetExpr(const json &res_target);
 
   // Helper to detect and extract aggregate functions
   SimplestAggFnType GetAggFnType(const std::string &func_name);
 
   // Column reference processing
   std::unique_ptr<SimplestAttr> ConvertColumnRef(const json &col_ref);
+
+  // General expression dispatcher (handles any parse-tree expression node)
+  std::unique_ptr<AQPExpr> ConvertExpr(const json &node);
+  std::unique_ptr<AQPExpr> ConvertTypeCast(const json &typecast_node);
+  std::unique_ptr<AQPExpr> ConvertFuncCallExpr(const json &func_call);
 
   // Constant/literal processing
   std::unique_ptr<SimplestConstVar> ConvertAConst(const json &a_const);
@@ -110,6 +118,10 @@ private:
   // Aggregate function tracking
   std::vector<std::pair<std::unique_ptr<SimplestAttr>, SimplestAggFnType>>
       agg_functions;
+
+  // Scratch space for expression targets (populated by ConvertTargetList)
+  std::vector<std::unique_ptr<AQPExpr>> expr_target_list_scratch_;
+  std::vector<std::unique_ptr<AQPExpr>> agg_fn_exprs_scratch_;
 
   // Schema lookup options (use one or the other)
   const SchemaParser *schema_parser_ = nullptr;

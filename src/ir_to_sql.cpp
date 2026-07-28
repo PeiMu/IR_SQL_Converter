@@ -326,6 +326,12 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
     // Process target_list if present (for SELECT clause with aggregates)
     if (!agg_op.target_list.empty()) {
       for (size_t idx = 0; idx < agg_op.target_list.size(); idx++) {
+        if (idx < agg_op.expr_target_list.size() &&
+            agg_op.expr_target_list[idx]) {
+          select_field.emplace_back(
+              CollectFilter(agg_op.expr_target_list[idx]));
+          continue;
+        }
         auto &target = agg_op.target_list[idx];
         auto target_table_index = target->GetTableIndex();
 
@@ -381,6 +387,8 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
         std::string dist_prefix = dist ? "DISTINCT " : "";
         if (agg_fn.second == SimplestAggFnType::CountStar) {
           select_field.emplace_back(dist ? "count(DISTINCT *)" : "count(*)");
+        } else if (target_list_covered && agg_fn.first) {
+          // Already emitted by target_list processing above — skip
         } else if (agg_fn.first) {
           auto tbl = agg_fn.first->GetTableIndex();
           if (table_names.find(tbl) != table_names.end()) {
@@ -1061,7 +1069,7 @@ std::string IRToSQLConverter::CollectFilter(
     switch (cast.target_type) {
     case SimplestVarType::BoolVar:   ret_str += "BOOLEAN"; break;
     case SimplestVarType::IntVar:    ret_str += "INTEGER"; break;
-    case SimplestVarType::FloatVar:  ret_str += "DOUBLE"; break;
+    case SimplestVarType::FloatVar:  ret_str += "DOUBLE PRECISION"; break;
     case SimplestVarType::StringVar: ret_str += "VARCHAR"; break;
     case SimplestVarType::Date:         ret_str += "DATE"; break;
     case SimplestVarType::IntervalVar: ret_str += "INTERVAL"; break;
