@@ -21,9 +21,94 @@ static std::string TruncateIdentifier(const std::string &name) {
 }
 std::string IRToSQLConverter::ConvertSimplestIRToSQL(AQPStmt &plan) {
   std::string sql_code;
+  has_distinct = false;
 #ifdef DEBUG
   assert(nullptr != plan);
 #endif
+
+  // Handle set operations (UNION/INTERSECT/EXCEPT) by recursively converting
+  // each branch, then wrapping the combined result in any outer operators
+  // (Projection, Aggregate, Limit, OrderBy).
+  {
+    // Walk past top-level Projection/Aggregate/OrderBy/Limit/Distinct to find
+    // a SetOpNode underneath.
+    AQPStmt *outer = &plan;
+    std::vector<AQPStmt *> outer_chain;
+    while (outer) {
+      auto nt = outer->GetNodeType();
+      if (nt == SimplestNodeType::SetOpNode)
+        break;
+      if ((nt == SimplestNodeType::ProjectionNode ||
+           nt == SimplestNodeType::AggregateNode ||
+           nt == SimplestNodeType::LimitNode ||
+           nt == SimplestNodeType::OrderNode ||
+           nt == SimplestNodeType::DistinctNode) &&
+          outer->children.size() == 1 && outer->children[0]) {
+        outer_chain.push_back(outer);
+        outer = outer->children[0].get();
+      } else {
+        outer = nullptr;
+      }
+    }
+    if (outer && outer->GetNodeType() == SimplestNodeType::SetOpNode) {
+      auto &setop = outer->Cast<SimplestSetOp>();
+      std::string combined = BuildSetOpSQL(setop);
+      if (outer_chain.empty()) {
+        return combined + ";";
+      }
+      // Wrap set operation in outer operators (e.g., SELECT COUNT(*) FROM (...))
+      // Walk the outer chain to build SELECT list, ORDER BY, LIMIT.
+      std::string select_list;
+      std::string order_clause;
+      std::string limit_clause;
+      for (auto *node : outer_chain) {
+        switch (node->GetNodeType()) {
+        case SimplestNodeType::AggregateNode: {
+          auto &agg = node->Cast<SimplestAggregate>();
+          bool first = true;
+          for (const auto &fn : agg.agg_fns) {
+            if (!first) select_list += ", ";
+            first = false;
+            select_list += TranslateSimplestAggFnType(fn.second);
+            if (fn.second == CountStar) {
+              select_list += "(*)";
+            } else if (fn.first) {
+              select_list += "(col" + std::to_string(fn.first->GetColumnIndex()) + ")";
+            } else {
+              select_list += "(*)";
+            }
+          }
+          break;
+        }
+        case SimplestNodeType::OrderNode: {
+          auto &ob = node->Cast<SimplestOrderBy>();
+          for (size_t i = 0; i < ob.orders.size(); i++) {
+            if (i > 0) order_clause += ", ";
+            order_clause += std::to_string(ob.orders[i].attr->GetColumnIndex() + 1);
+            order_clause += (ob.orders[i].order_type == SimplestOrderType::Descending ? " DESC" : " ASC");
+          }
+          break;
+        }
+        case SimplestNodeType::LimitNode: {
+          auto &lim = node->Cast<SimplestLimit>();
+          limit_clause = "limit " + std::to_string(lim.limit_val.val);
+          break;
+        }
+        default:
+          break;
+        }
+      }
+      if (select_list.empty()) select_list = "*";
+      sql_code += "SELECT " + select_list;
+      sql_code += "\nFROM (" + combined + ") AS _setop";
+      if (!order_clause.empty())
+        sql_code += "\nORDER BY " + order_clause;
+      if (!limit_clause.empty())
+        sql_code += "\n" + limit_clause;
+      sql_code += ";";
+      return sql_code;
+    }
+  }
 
   GenerateSQL(plan);
 
@@ -31,7 +116,7 @@ std::string IRToSQLConverter::ConvertSimplestIRToSQL(AQPStmt &plan) {
   //	sql_code += "PRAGMA disable_convert_duckdb_to_ir;\n";
   //	sql_code += "PRAGMA disable_convert_ir_to_sql;\n";
 
-  sql_code += "SELECT ";
+  sql_code += has_distinct ? "SELECT DISTINCT " : "SELECT ";
   for (const auto &select : select_field) {
     sql_code += select;
     sql_code += ", ";
@@ -40,19 +125,34 @@ std::string IRToSQLConverter::ConvertSimplestIRToSQL(AQPStmt &plan) {
     sql_code.erase(sql_code.size() - 2);
 
   sql_code += "\nFROM ";
-  bool first_table = true;
-  for (const auto &table_name : table_names) {
-    if (outer_join_tables.count(table_name.first))
+  // Build ordered list: tables with outer joins attached go last so all
+  // ON-clause references are already in scope.
+  std::vector<unsigned int> from_order;
+  std::vector<unsigned int> from_order_anchors;
+  for (const auto &tn : table_names) {
+    if (outer_join_tables.count(tn.first))
       continue;
+    if (outer_join_map.count(tn.first))
+      from_order_anchors.push_back(tn.first);
+    else
+      from_order.push_back(tn.first);
+  }
+  from_order.insert(from_order.end(), from_order_anchors.begin(),
+                    from_order_anchors.end());
+  bool first_table = true;
+  for (auto idx : from_order) {
     if (!first_table)
       sql_code += ", ";
     auto table_name_idx =
-        table_name.second + "_" + std::to_string(table_name.first);
-    sql_code += table_name.second + " AS " + table_name_idx;
+        table_names[idx] + "_" + std::to_string(idx);
+    sql_code += table_names[idx] + " AS " + table_name_idx;
     first_table = false;
+    auto it = outer_join_map.find(idx);
+    if (it != outer_join_map.end()) {
+      for (const auto &oj : it->second)
+        sql_code += oj;
+    }
   }
-  for (const auto &oj : outer_join_clauses)
-    sql_code += oj;
 
   if (!filter_field.empty() || !join_field.empty()) {
     sql_code += "\nWHERE ";
@@ -143,6 +243,25 @@ std::string IRToSQLConverter::ConvertSimplestIRToSQL(AQPStmt &plan) {
   std::cout << "current SQL code is:\n" + sql_code << std::endl;
 #endif
   return sql_code;
+}
+
+std::string IRToSQLConverter::BuildSetOpSQL(SimplestSetOp &setop) {
+  std::string set_keyword;
+  switch (setop.GetSetOpType()) {
+  case SetOpUnion:     set_keyword = setop.IsAll() ? " UNION ALL " : " UNION "; break;
+  case SetOpIntersect: set_keyword = setop.IsAll() ? " INTERSECT ALL " : " INTERSECT "; break;
+  case SetOpExcept:    set_keyword = setop.IsAll() ? " EXCEPT ALL " : " EXCEPT "; break;
+  }
+  std::string combined;
+  for (size_t i = 0; i < setop.children.size(); i++) {
+    if (i > 0) combined += set_keyword;
+    IRToSQLConverter child_conv;
+    child_conv.SetTableColumnMappings(table_column_mappings);
+    combined += child_conv.ConvertSimplestIRToSQL(*setop.children[i]);
+    while (!combined.empty() && combined.back() == ';')
+      combined.pop_back();
+  }
+  return combined;
 }
 
 void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
@@ -590,12 +709,40 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
     case Left:
     case Right:
     case Full: {
-      std::string on_clause;
-      std::unordered_set<unsigned int> right_tables;
+      // For RIGHT JOIN, swap sides so the optional table appears after
+      // LEFT JOIN, avoiding cross-scope references in generated SQL.
+      bool flip = (join_type == Right);
+      std::unordered_set<unsigned int> oj_tables;
+      // Collect all preserved-side (anchor) table indices.
+      std::unordered_set<unsigned int> anchor_tables;
       for (const auto &cond : conditions) {
         auto &var_comp = cond->Cast<SimplestVarComparison>();
-        auto &la = var_comp.left_attr;
-        auto &ra = var_comp.right_attr;
+        auto &preserved = flip ? var_comp.right_attr : var_comp.left_attr;
+        auto &optional  = flip ? var_comp.left_attr  : var_comp.right_attr;
+        anchor_tables.insert(preserved->GetTableIndex());
+        oj_tables.insert(optional->GetTableIndex());
+      }
+      // Build ON clause: only include conditions where the preserved side
+      // references exactly one anchor table (avoids cross-scope references).
+      // Conditions referencing multiple non-OJ tables go to WHERE instead.
+      // Pick the anchor that appears most frequently.
+      unsigned int primary_anchor = 0;
+      {
+        std::unordered_map<unsigned int, int> freq;
+        for (const auto &cond : conditions) {
+          auto &var_comp = cond->Cast<SimplestVarComparison>();
+          auto &preserved = flip ? var_comp.right_attr : var_comp.left_attr;
+          freq[preserved->GetTableIndex()]++;
+        }
+        int best = -1;
+        for (auto &kv : freq)
+          if (kv.second > best) { best = kv.second; primary_anchor = kv.first; }
+      }
+      std::string on_clause;
+      for (const auto &cond : conditions) {
+        auto &var_comp = cond->Cast<SimplestVarComparison>();
+        auto &la = flip ? var_comp.right_attr : var_comp.left_attr;
+        auto &ra = flip ? var_comp.left_attr  : var_comp.right_attr;
         auto lt = table_names[la->GetTableIndex()] + "_" +
                   std::to_string(la->GetTableIndex());
         auto rt = table_names[ra->GetTableIndex()] + "_" +
@@ -604,36 +751,41 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
                                       la->GetColumnIndex(), la->GetColumnName());
         auto rc = GetActualColumnName(ra->GetTableIndex(),
                                       ra->GetColumnIndex(), ra->GetColumnName());
-        if (!on_clause.empty())
-          on_clause += " AND ";
-        on_clause += lt + "." + lc;
+        std::string cmp_op;
         switch (var_comp.GetSimplestExprType()) {
-        case SimplestExprType::Equal:        on_clause += " = "; break;
-        case SimplestExprType::NotEqual:     on_clause += " != "; break;
-        case SimplestExprType::LessThan:     on_clause += " < "; break;
-        case SimplestExprType::LessEqual:    on_clause += " <= "; break;
-        case SimplestExprType::GreaterThan:  on_clause += " > "; break;
-        case SimplestExprType::GreaterEqual: on_clause += " >= "; break;
+        case SimplestExprType::Equal:        cmp_op = " = "; break;
+        case SimplestExprType::NotEqual:     cmp_op = " != "; break;
+        case SimplestExprType::LessThan:     cmp_op = flip ? " > " : " < "; break;
+        case SimplestExprType::LessEqual:    cmp_op = flip ? " >= " : " <= "; break;
+        case SimplestExprType::GreaterThan:  cmp_op = flip ? " < " : " > "; break;
+        case SimplestExprType::GreaterEqual: cmp_op = flip ? " <= " : " >= "; break;
         default:
           throw std::runtime_error(
               "IRToSQL unsupported: outer join comparison expr type " +
               std::to_string(var_comp.GetSimplestExprType()));
         }
-        on_clause += rt + "." + rc;
-        right_tables.insert(ra->GetTableIndex());
+        std::string pred = lt + "." + lc + cmp_op + rt + "." + rc;
+        // Only put conditions anchored on the primary anchor into ON;
+        // others go to WHERE to avoid cross-scope references.
+        if (la->GetTableIndex() == primary_anchor ||
+            oj_tables.count(la->GetTableIndex())) {
+          if (!on_clause.empty())
+            on_clause += " AND ";
+          on_clause += pred;
+        } else {
+          filter_field.emplace_back(pred);
+        }
       }
       std::string join_keyword;
-      if (join_type == Left)
+      if (join_type == Left || join_type == Right)
         join_keyword = " LEFT JOIN ";
-      else if (join_type == Right)
-        join_keyword = " RIGHT JOIN ";
       else
         join_keyword = " FULL OUTER JOIN ";
-      for (auto rt_idx : right_tables) {
+      for (auto rt_idx : oj_tables) {
         auto rt_name = table_names[rt_idx];
         auto rt_alias = rt_name + "_" + std::to_string(rt_idx);
-        outer_join_clauses.push_back(join_keyword + rt_name + " AS " +
-                                     rt_alias + " ON " + on_clause);
+        outer_join_map[primary_anchor].push_back(
+            join_keyword + rt_name + " AS " + rt_alias + " ON " + on_clause);
         outer_join_tables.insert(rt_idx);
       }
       break;
@@ -740,6 +892,11 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
     chunk_contents[chunk_op.GetTableIndex()] = chunk_op.GetContents();
     break;
   }
+  case SimplestNodeType::DistinctNode:
+    has_distinct = true;
+    break;
+  case SimplestNodeType::SetOpNode:
+    break;
   case SimplestNodeType::HashNode:
   case SimplestNodeType::CrossProductNode:
   // SortNode in PostgreSQL is a physical node, and no information for

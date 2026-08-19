@@ -243,6 +243,36 @@ std::unique_ptr<AQPStmt> DuckToIR::ConstructSimplestStmt(
                                               delim_get.table_index, table_name);
       break;
     }
+    case duckdb::LogicalOperatorType::LOGICAL_DISTINCT: {
+      auto base_stmt = std::make_unique<AQPStmt>(
+          std::vector<std::unique_ptr<AQPStmt>>{},
+          std::vector<std::unique_ptr<SimplestAttr>>{},
+          SimplestNodeType::DistinctNode);
+      if (left_child) {
+        base_stmt->children.push_back(std::move(left_child));
+      }
+      result = std::make_unique<SimplestDistinct>(std::move(base_stmt));
+      break;
+    }
+    case duckdb::LogicalOperatorType::LOGICAL_UNION:
+    case duckdb::LogicalOperatorType::LOGICAL_INTERSECT:
+    case duckdb::LogicalOperatorType::LOGICAL_EXCEPT: {
+      auto &setop =
+          duckdb_plan_pointer->Cast<duckdb::LogicalSetOperation>();
+      SimplestSetOpType op_type;
+      switch (duckdb_plan_pointer->type) {
+      case duckdb::LogicalOperatorType::LOGICAL_UNION:
+        op_type = SimplestSetOpType::SetOpUnion; break;
+      case duckdb::LogicalOperatorType::LOGICAL_INTERSECT:
+        op_type = SimplestSetOpType::SetOpIntersect; break;
+      default:
+        op_type = SimplestSetOpType::SetOpExcept; break;
+      }
+      result = std::make_unique<SimplestSetOp>(
+          std::move(left_child), std::move(right_child),
+          op_type, setop.setop_all);
+      break;
+    }
     default:
       throw std::runtime_error(
           "DuckToIR unsupported: logical operator type " +

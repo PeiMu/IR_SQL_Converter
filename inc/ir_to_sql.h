@@ -23,6 +23,8 @@ public:
 private:
   void GenerateSQL(AQPStmt &op);
 
+  std::string BuildSetOpSQL(SimplestSetOp &setop);
+
   std::string TranslateSimplestAggFnType(SimplestAggFnType agg_fn_type);
 
   std::string CollectFilter(const std::unique_ptr<AQPExpr> &qual_expr);
@@ -41,10 +43,11 @@ private:
   std::unordered_map<unsigned int, std::string> agg_field;
   std::vector<std::string> filter_field;
   std::vector<std::string> join_field;
-  // LEFT/RIGHT JOIN clauses rendered as "LEFT JOIN table AS alias ON cond"
-  std::vector<std::string> outer_join_clauses;
-  // Table indices that appear as the right side of an outer join (excluded from
-  // the comma-separated FROM list since they're part of the JOIN clause).
+  // Outer join clauses keyed by the anchor (preserved-side) table index.
+  // Each entry: anchor_table_idx -> list of "LEFT JOIN t AS a ON cond" strings.
+  std::unordered_map<unsigned int, std::vector<std::string>> outer_join_map;
+  // Table indices that appear as the joined (optional) side of an outer join
+  // (excluded from the comma-separated FROM list).
   std::unordered_set<unsigned int> outer_join_tables;
   std::vector<std::unique_ptr<SimplestAttr>> group_by_vec;
   std::vector<std::unique_ptr<AQPExpr>> group_exprs_vec;
@@ -62,5 +65,7 @@ private:
 
   std::unordered_map<std::pair<idx_t, idx_t>, idx_t, pair_hash>
       proj_table_to_real_table;
+
+  bool has_distinct = false;
 };
 } // namespace ir_sql_converter

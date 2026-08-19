@@ -105,7 +105,9 @@ enum SimplestNodeType {
   SortNode,
   RawSQLNode,
   FunctionExprNodeType,
-  CaseExprNodeType
+  CaseExprNodeType,
+  DistinctNode,
+  SetOpNode
 };
 
 class AQPNode {
@@ -1155,6 +1157,57 @@ public:
 
 private:
   unsigned int table_index;
+};
+
+class SimplestDistinct : public AQPStmt {
+public:
+  SimplestDistinct(std::unique_ptr<AQPStmt> base_stmt)
+      : AQPStmt(std::move(base_stmt), DistinctNode) {};
+  ~SimplestDistinct() override = default;
+
+  std::string Print(bool print = true, int depth = 0) override {
+    std::string str = "Distinct";
+    str += AQPStmt::Print(false, depth);
+    if (print)
+      std::cout << str << std::endl;
+    return str;
+  }
+};
+
+enum SimplestSetOpType { SetOpUnion, SetOpIntersect, SetOpExcept };
+
+class SimplestSetOp : public AQPStmt {
+public:
+  SimplestSetOp(std::unique_ptr<AQPStmt> left, std::unique_ptr<AQPStmt> right,
+                SimplestSetOpType op_type, bool is_all)
+      : AQPStmt(std::vector<std::unique_ptr<AQPStmt>>{},
+                std::vector<std::unique_ptr<SimplestAttr>>{}, SetOpNode),
+        op_type_(op_type), is_all_(is_all) {
+    children.push_back(std::move(left));
+    children.push_back(std::move(right));
+  }
+  ~SimplestSetOp() override = default;
+
+  SimplestSetOpType GetSetOpType() const { return op_type_; }
+  bool IsAll() const { return is_all_; }
+
+  std::string Print(bool print = true, int depth = 0) override {
+    std::string str;
+    switch (op_type_) {
+    case SetOpUnion:     str = "Union"; break;
+    case SetOpIntersect: str = "Intersect"; break;
+    case SetOpExcept:    str = "Except"; break;
+    }
+    if (is_all_) str += " All";
+    str += AQPStmt::Print(false, depth);
+    if (print)
+      std::cout << str << std::endl;
+    return str;
+  }
+
+private:
+  SimplestSetOpType op_type_;
+  bool is_all_;
 };
 
 using agg_fn_pair =
