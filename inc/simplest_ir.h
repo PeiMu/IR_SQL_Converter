@@ -300,6 +300,8 @@ public:
 
   std::string GetColumnName() const { return column_name; }
 
+  void SetTableIndex(unsigned int idx) { table_index = idx; }
+
   void SetColumnName(std::string col_name) {
     column_name = std::move(col_name);
   }
@@ -1609,6 +1611,7 @@ public:
   ~SimplestScan() override = default;
 
   unsigned int GetTableIndex() const { return table_index; }
+  void SetTableIndex(unsigned int idx) { table_index = idx; }
 
   std::string GetTableName() const { return table_name; }
 

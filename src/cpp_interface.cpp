@@ -74,6 +74,21 @@ std::unique_ptr<AQPStmt> ConvertNodeStrToIR(const std::string &nodestr,
   return std::move(postgres_stmt);
 }
 
+std::unique_ptr<AQPStmt> ConvertNodeStrToIR(
+    const std::string &nodestr, size_t query_id,
+    const std::unordered_map<unsigned int, std::string> &oid_to_name) {
+  NodestrToIR nodestr_to_ir_converter;
+  nodestr_to_ir_converter.Clear();
+  nodestr_to_ir_converter.oid_to_name = oid_to_name;
+  std::unique_ptr<AQPNode> postgres_plan =
+      nodestr_to_ir_converter.StringToNode(nodestr.c_str());
+  std::unique_ptr<AQPStmt> postgres_stmt =
+      unique_ptr_cast<AQPNode, AQPStmt>(std::move(postgres_plan));
+  postgres_stmt = nodestr_to_ir_converter.GenerateProjHead(
+      std::move(postgres_stmt), query_id);
+  return std::move(postgres_stmt);
+}
+
 std::string
 ConvertIRToNodeStr(const std::unique_ptr<AQPStmt> &simplest_ir) {
   IRToNodestr ir_to_nodestr_converter;

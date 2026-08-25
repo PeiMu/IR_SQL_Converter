@@ -44,6 +44,7 @@ public:
   std::unique_ptr<AQPNode> StringToNode(const char *str);
 
   std::deque<table_str> table_col_names;
+  std::unordered_map<unsigned int, std::string> oid_to_name;
 
   std::unique_ptr<AQPStmt>
   GenerateProjHead(std::unique_ptr<AQPStmt> postgres_stmt,
@@ -102,7 +103,9 @@ private:
 
   std::unique_ptr<SimplestJoin> ReadCommonJoin();
 
-  std::unique_ptr<SimplestHash> ReadHash();
+  std::unique_ptr<AQPStmt> ReadHash();
+
+  std::unique_ptr<AQPStmt> ReadMemoize();
 
   std::unique_ptr<SimplestJoin> ReadHashJoin();
 
@@ -139,6 +142,8 @@ private:
   std::unique_ptr<AQPStmt> ReadPlannedStmt();
 
   void ReadRangeTblEntry();
+
+  void ReadRtePermissionInfo();
 
   void ReadAlias();
 

@@ -31,6 +31,10 @@ ConvertNodeStrToIRFromFile(const std::string &nodestr_file_name);
 std::unique_ptr<AQPStmt> ConvertNodeStrToIR(const std::string &nodestr,
                                                  size_t query_id);
 
+std::unique_ptr<AQPStmt> ConvertNodeStrToIR(
+    const std::string &nodestr, size_t query_id,
+    const std::unordered_map<unsigned int, std::string> &oid_to_name);
+
 // Convert SimplestIR to PostgreSQL nodestring format
 std::string
 ConvertIRToNodeStr(const std::unique_ptr<AQPStmt> &simplest_ir);

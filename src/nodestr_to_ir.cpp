@@ -481,42 +481,52 @@ void *NodestrToIR::ReadBitmapset() {
 }
 
 std::vector<int> NodestrToIR::ReadAttrNumberCols(int numCols) {
-  int tokenLength, i;
+  int tokenLength;
   const char *token;
   std::vector<int> attr_cols;
 
-  for (i = 0; i < numCols; i++) {
+  token = PG_strtok(&tokenLength); // consume '(' or '<>'
+  if (tokenLength == 0)
+    return attr_cols; // "<>" = empty
+  for (int i = 0; i < numCols; i++) {
     token = PG_strtok(&tokenLength);
     attr_cols.emplace_back(atoi(token));
   }
+  token = PG_strtok(&tokenLength); // consume ')'
 
   return attr_cols;
 }
 
 std::vector<int> NodestrToIR::ReadIntCols(int numCols) {
-  int tokenLength, i;
+  int tokenLength;
   const char *token;
   std::vector<int> oid_cols;
 
-  //	oid_vals = (PGOid *) malloc(numCols * sizeof(PGOid));
-  for (i = 0; i < numCols; i++) {
+  token = PG_strtok(&tokenLength); // consume '(' or '<>'
+  if (tokenLength == 0)
+    return oid_cols;
+  for (int i = 0; i < numCols; i++) {
     token = PG_strtok(&tokenLength);
     oid_cols.emplace_back(atoi(token));
   }
+  token = PG_strtok(&tokenLength); // consume ')'
 
   return oid_cols;
 }
 
 std::vector<bool> NodestrToIR::ReadBoolCols(int numCols) {
-  int tokenLength, i;
+  int tokenLength;
   const char *token;
   std::vector<bool> bool_cols;
 
-  //	oid_vals = (PGOid *) malloc(numCols * sizeof(PGOid));
-  for (i = 0; i < numCols; i++) {
+  token = PG_strtok(&tokenLength); // consume '(' or '<>'
+  if (tokenLength == 0)
+    return bool_cols;
+  for (int i = 0; i < numCols; i++) {
     token = PG_strtok(&tokenLength);
     bool_cols.emplace_back(strtobool(token));
   }
+  token = PG_strtok(&tokenLength); // consume ')'
 
   return bool_cols;
 }
@@ -526,6 +536,9 @@ std::unique_ptr<AQPStmt> NodestrToIR::ReadCommonPlan() {
 
   std::vector<std::unique_ptr<AQPStmt>> children;
 
+  // disabled_nodes (PG 17+)
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
   // startup_cost
   token = PG_strtok(&length);
   token = PG_strtok(&length);
@@ -538,10 +551,13 @@ std::unique_ptr<AQPStmt> NodestrToIR::ReadCommonPlan() {
   // plan_width
   token = PG_strtok(&length);
   token = PG_strtok(&length);
-  // parallel_awre
+  // parallel_aware
   token = PG_strtok(&length);
   token = PG_strtok(&length);
   // parallel_safe
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
+  // async_capable (PG 17+)
   token = PG_strtok(&length);
   token = PG_strtok(&length);
   // plan_node_id
@@ -645,6 +661,9 @@ std::unique_ptr<SimplestAggregate> NodestrToIR::ReadAgg() {
   // numGroups
   token = PG_strtok(&length);
   token = PG_strtok(&length);
+  // transitionSpace (PG 14+)
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
   // aggParams
   token = PG_strtok(&length);
   (void)token;
@@ -723,10 +742,19 @@ std::unique_ptr<SimplestAttr> NodestrToIR::ReadAggref() {
   token = PG_strtok(&length);
   auto agg_kind =
       (length == 0) ? '\0' : (token[0] == '\\' ? token[1] : token[0]);
+  // aggpresorted (PG 16+)
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
   // agglevelsup
   token = PG_strtok(&length);
   token = PG_strtok(&length);
   // aggsplit
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
+  // aggno (PG 16+)
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
+  // aggtransno (PG 16+)
   token = PG_strtok(&length);
   token = PG_strtok(&length);
   // location
@@ -790,17 +818,28 @@ std::unique_ptr<SimplestAttr> NodestrToIR::ReadVar() {
   // varcollid
   token = PG_strtok(&length);
   token = PG_strtok(&length);
+  // varnullingrels (PG 16+)
+  token = PG_strtok(&length);
+  (void)token;
+  ReadBitmapset();
   // varlevelsup
   token = PG_strtok(&length);
   token = PG_strtok(&length);
-  // varnoold
+  // varreturningtype (PG 17+)
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
+  // varnosyn (was varnoold) — PG uses 1-based range table indices
   token = PG_strtok(&length);
   token = PG_strtok(&length);
   unsigned int table_index = atoi(token);
-  // varoattno
+  if (!oid_to_name.empty() && table_index > 0)
+    table_index--;
+  // varattnosyn (was varoattno) — PG uses 1-based column numbers
   token = PG_strtok(&length);
   token = PG_strtok(&length);
   unsigned int column_index = atoi(token);
+  if (!oid_to_name.empty() && column_index > 0)
+    column_index--;
   // location
   token = PG_strtok(&length);
   token = PG_strtok(&length);
@@ -926,7 +965,7 @@ std::unique_ptr<SimplestJoin> NodestrToIR::ReadCommonJoin() {
   }
 }
 
-std::unique_ptr<SimplestHash> NodestrToIR::ReadHash() {
+std::unique_ptr<AQPStmt> NodestrToIR::ReadHash() {
   READ_TEMP_LOCALS();
 
   std::unique_ptr<AQPStmt> common_plan = ReadCommonPlan();
@@ -934,14 +973,7 @@ std::unique_ptr<SimplestHash> NodestrToIR::ReadHash() {
   // hashkeys
   token = PG_strtok(&length);
   (void)token;
-  std::vector<std::unique_ptr<AQPNode>> node_vec;
-  std::vector<std::unique_ptr<SimplestAttr>> hash_keys;
-  NodeRead(NULL, 0, true, &node_vec);
-  for (auto &node : node_vec) {
-    if (node)
-      hash_keys.emplace_back(
-          unique_ptr_cast<AQPNode, SimplestAttr>(std::move(node)));
-  }
+  NodeRead(NULL, 0);
   // skewTable
   token = PG_strtok(&length);
   token = PG_strtok(&length);
@@ -955,10 +987,49 @@ std::unique_ptr<SimplestHash> NodestrToIR::ReadHash() {
   token = PG_strtok(&length);
   token = PG_strtok(&length);
 
-  std::unique_ptr<SimplestHash> hash_stmt = std::make_unique<SimplestHash>(
-      std::move(common_plan), std::move(hash_keys));
+  // Hash is transparent: return the child (build-side scan) directly
+  if (!common_plan->children.empty() && common_plan->children[0])
+    return std::move(common_plan->children[0]);
+  return common_plan;
+}
 
-  return hash_stmt;
+std::unique_ptr<AQPStmt> NodestrToIR::ReadMemoize() {
+  READ_TEMP_LOCALS();
+
+  std::unique_ptr<AQPStmt> common_plan = ReadCommonPlan();
+
+  // numKeys
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
+  int numKeys = atoi(token);
+  // hashOperators
+  token = PG_strtok(&length);
+  ReadIntCols(numKeys);
+  // collations
+  token = PG_strtok(&length);
+  ReadIntCols(numKeys);
+  // param_exprs
+  token = PG_strtok(&length);
+  (void)token;
+  NodeRead(NULL, 0);
+  // singlerow
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
+  // binary_mode
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
+  // est_entries
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
+  // keyparamids
+  token = PG_strtok(&length);
+  (void)token;
+  ReadBitmapset();
+
+  // Memoize is transparent: return the child directly
+  if (!common_plan->children.empty() && common_plan->children[0])
+    return std::move(common_plan->children[0]);
+  return common_plan;
 }
 
 std::unique_ptr<SimplestJoin> NodestrToIR::ReadHashJoin() {
@@ -1028,9 +1099,9 @@ std::unique_ptr<SimplestJoin> NodestrToIR::ReadMergeJoin() {
   // mergeCollations
   token = PG_strtok(&length);
   ReadIntCols(cond_num);
-  // mergeStrategies
+  // mergeReversals (was mergeStrategies before PG 17)
   token = PG_strtok(&length);
-  ReadIntCols(cond_num);
+  ReadBoolCols(cond_num);
   // mergeNullsFirst
   token = PG_strtok(&length);
   ReadBoolCols(cond_num);
@@ -1190,6 +1261,10 @@ std::unique_ptr<SimplestScan> NodestrToIR::ReadIndexOnlyScan() {
           unique_ptr_cast<AQPNode, SimplestVarParamComparison>(
               std::move(node)));
   }
+  // recheckqual (PG 17+)
+  token = PG_strtok(&length);
+  (void)token;
+  NodeRead(NULL, 0);
   // indexorderby
   token = PG_strtok(&length);
   (void)token;
@@ -1370,7 +1445,7 @@ std::unique_ptr<SimplestLogicalExpr> NodestrToIR::ReadBoolExpr() {
     std::cout << "Doesn't support logical op " +
                      std::to_string((int)logical_op) + " yet!"
               << std::endl;
-    exit(-1);
+    throw std::runtime_error("nodestr_to_ir: unsupported");
   }
 
   // args
@@ -1445,6 +1520,12 @@ std::unique_ptr<AQPExpr> NodestrToIR::ReadScalarArrayOpExpr() {
   token = PG_strtok(&length);
   SimplestExprType op_type = GetSimplestComparisonType(atoi(token));
   // opfuncid
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
+  // hashfuncid (PG 16+)
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
+  // negfuncid (PG 16+)
   token = PG_strtok(&length);
   token = PG_strtok(&length);
   // useOr
@@ -1627,7 +1708,7 @@ std::unique_ptr<SimplestConstVar> NodestrToIR::ReadConst() {
       std::cout << "Doesn't support type " + std::to_string(const_type) +
                        " yet!"
                 << std::endl;
-      exit(-1);
+      throw std::runtime_error("nodestr_to_ir: unsupported");
     }
   }
 }
@@ -1639,6 +1720,9 @@ std::unique_ptr<AQPStmt> NodestrToIR::ReadPlannedStmt() {
   token = PG_strtok(&length);
   token = PG_strtok(&length);
   // queryId
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
+  // planId (PG 17+)
   token = PG_strtok(&length);
   token = PG_strtok(&length);
   // hasReturning
@@ -1667,7 +1751,19 @@ std::unique_ptr<AQPStmt> NodestrToIR::ReadPlannedStmt() {
   (void)token;
   std::unique_ptr<AQPStmt> plan_tree =
       unique_ptr_cast<AQPNode, AQPStmt>(NodeRead(NULL, 0));
+  // partPruneInfos (PG 17+)
+  token = PG_strtok(&length);
+  (void)token;
+  NodeRead(NULL, 0);
   // rtable
+  token = PG_strtok(&length);
+  (void)token;
+  NodeRead(NULL, 0);
+  // unprunableRelids (PG 17+)
+  token = PG_strtok(&length);
+  (void)token;
+  ReadBitmapset();
+  // permInfos (PG 16+)
   token = PG_strtok(&length);
   (void)token;
   NodeRead(NULL, 0);
@@ -1675,7 +1771,7 @@ std::unique_ptr<AQPStmt> NodestrToIR::ReadPlannedStmt() {
   token = PG_strtok(&length);
   (void)token;
   NodeRead(NULL, 0);
-  // rootResultRelations
+  // appendRelations (PG 14+)
   token = PG_strtok(&length);
   (void)token;
   NodeRead(NULL, 0);
@@ -1686,7 +1782,7 @@ std::unique_ptr<AQPStmt> NodestrToIR::ReadPlannedStmt() {
   // rewindPlanIDs
   token = PG_strtok(&length);
   (void)token;
-  NodeRead(NULL, 0);
+  ReadBitmapset();
   // rowMarks
   token = PG_strtok(&length);
   (void)token;
@@ -1737,8 +1833,12 @@ void NodestrToIR::ReadRangeTblEntry() {
   duckdb_libpgquery::PGRTEKind rte_kind =
       (duckdb_libpgquery::PGRTEKind)atoi(token);
   switch (rte_kind) {
-  case duckdb_libpgquery::PG_RTE_RELATION:
+  case duckdb_libpgquery::PG_RTE_RELATION: {
     // relid
+    token = PG_strtok(&length);
+    token = PG_strtok(&length);
+    unsigned int relid = static_cast<unsigned int>(atol(token));
+    // inh (PG 16+)
     token = PG_strtok(&length);
     token = PG_strtok(&length);
     // relkind
@@ -1747,11 +1847,26 @@ void NodestrToIR::ReadRangeTblEntry() {
     // rellockmode
     token = PG_strtok(&length);
     token = PG_strtok(&length);
+    // perminfoindex (PG 16+)
+    token = PG_strtok(&length);
+    token = PG_strtok(&length);
     // tablesample
     token = PG_strtok(&length);
     (void)token;
     NodeRead(NULL, 0);
+    if (!oid_to_name.empty() && !table_col_names.empty()) {
+      auto it = oid_to_name.find(relid);
+      if (it != oid_to_name.end()) {
+        auto &last_entry = table_col_names.back();
+        if (!last_entry.empty() && last_entry.begin()->first != it->second) {
+          auto cols = std::move(last_entry.begin()->second);
+          last_entry.clear();
+          last_entry[it->second] = std::move(cols);
+        }
+      }
+    }
     break;
+  }
   case duckdb_libpgquery::PG_RTE_SUBQUERY:
     // subquery
     token = PG_strtok(&length);
@@ -1760,12 +1875,43 @@ void NodestrToIR::ReadRangeTblEntry() {
     // security_barrier
     token = PG_strtok(&length);
     token = PG_strtok(&length);
+    // re-used RELATION fields (PG 16+)
+    // relid
+    token = PG_strtok(&length);
+    token = PG_strtok(&length);
+    // inh
+    token = PG_strtok(&length);
+    token = PG_strtok(&length);
+    // relkind
+    token = PG_strtok(&length);
+    token = PG_strtok(&length);
+    // rellockmode
+    token = PG_strtok(&length);
+    token = PG_strtok(&length);
+    // perminfoindex
+    token = PG_strtok(&length);
+    token = PG_strtok(&length);
     break;
   case duckdb_libpgquery::PG_RTE_JOIN:
     // jointype
     token = PG_strtok(&length);
     token = PG_strtok(&length);
+    // joinmergedcols (PG 16+)
+    token = PG_strtok(&length);
+    token = PG_strtok(&length);
     // joinaliasvars
+    token = PG_strtok(&length);
+    (void)token;
+    NodeRead(NULL, 0);
+    // joinleftcols (PG 16+)
+    token = PG_strtok(&length);
+    (void)token;
+    NodeRead(NULL, 0);
+    // joinrightcols (PG 16+)
+    token = PG_strtok(&length);
+    (void)token;
+    NodeRead(NULL, 0);
+    // join_using_alias (PG 16+)
     token = PG_strtok(&length);
     (void)token;
     NodeRead(NULL, 0);
@@ -1833,9 +1979,6 @@ void NodestrToIR::ReadRangeTblEntry() {
     // enrtuples
     token = PG_strtok(&length);
     token = PG_strtok(&length);
-    // relid
-    token = PG_strtok(&length);
-    token = PG_strtok(&length);
     // coltypes
     token = PG_strtok(&length);
     (void)token;
@@ -1848,43 +1991,21 @@ void NodestrToIR::ReadRangeTblEntry() {
     token = PG_strtok(&length);
     (void)token;
     NodeRead(NULL, 0);
+    // relid (re-used)
+    token = PG_strtok(&length);
+    token = PG_strtok(&length);
     break;
+  // RTE_RESULT: no extra fields (PG 12+)
+  // RTE_GROUP: has groupexprs (PG 17+)
   default:
-    std::cout << "Error! unrecognized RTE kind: " + std::to_string(rte_kind)
-              << std::endl;
     break;
   }
   // lateral
   token = PG_strtok(&length);
   token = PG_strtok(&length);
-  // inh
-  token = PG_strtok(&length);
-  token = PG_strtok(&length);
   // inFromCl
   token = PG_strtok(&length);
   token = PG_strtok(&length);
-  // requiredPerms
-  token = PG_strtok(&length);
-  token = PG_strtok(&length);
-  // checkAsUser
-  token = PG_strtok(&length);
-  token = PG_strtok(&length);
-  // selectedCols
-  token = PG_strtok(&length);
-  (void)token;
-  ReadBitmapset();
-  // insertedCols
-  token = PG_strtok(&length);
-  (void)token;
-  ReadBitmapset();
-  // updatedCols
-  token = PG_strtok(&length);
-  (void)token;
-  ReadBitmapset();
-  // extraUpdatedCols
-  token = PG_strtok(&length);
-  (void)token;
-  ReadBitmapset();
   // securityQuals
   token = PG_strtok(&length);
   (void)token;
@@ -1914,6 +2035,34 @@ void NodestrToIR::ReadAlias() {
     table_col_pair[alias_name] = std::move(col_name_vec);
     table_col_names.push_back(std::move(table_col_pair));
   }
+}
+
+void NodestrToIR::ReadRtePermissionInfo() {
+  READ_TEMP_LOCALS();
+  // relid
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
+  // inh
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
+  // requiredPerms
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
+  // checkAsUser
+  token = PG_strtok(&length);
+  token = PG_strtok(&length);
+  // selectedCols
+  token = PG_strtok(&length);
+  (void)token;
+  ReadBitmapset();
+  // insertedCols
+  token = PG_strtok(&length);
+  (void)token;
+  ReadBitmapset();
+  // updatedCols
+  token = PG_strtok(&length);
+  (void)token;
+  ReadBitmapset();
 }
 
 PGDatum NodestrToIR::ReadDatum(bool typbyval, unsigned int &datum_len) {
@@ -2001,7 +2150,7 @@ SimplestVarType NodestrToIR::GetSimplestVarType(unsigned int type_id) {
   default:
     std::cout << "Doesn't support type " + std::to_string(type_id) + " yet!"
               << std::endl;
-    exit(-1);
+    throw std::runtime_error("nodestr_to_ir: unsupported");
   }
 
   return simplest_var_type;
@@ -2037,7 +2186,7 @@ SimplestJoinType NodestrToIR::GetSimplestJoinType(unsigned int type_id) {
   default:
     std::cout << "Doesn't support type " + std::to_string(type_id) + " yet!"
               << std::endl;
-    exit(-1);
+    throw std::runtime_error("nodestr_to_ir: unsupported");
   }
 
   return simplest_join_type;
@@ -2088,7 +2237,7 @@ SimplestExprType NodestrToIR::GetSimplestComparisonType(unsigned int type_id) {
   default:
     std::cout << "Doesn't support type " + std::to_string(type_id) + " yet!"
               << std::endl;
-    exit(-1);
+    throw std::runtime_error("nodestr_to_ir: unsupported");
   }
 
   return simplest_comprison_type;
@@ -2105,7 +2254,7 @@ SimplestTextOrder NodestrToIR::GetSimplestTextOrderType(int type_id) {
     std::cout << "Doesn't support text order type " + std::to_string(type_id) +
                      " yet!"
               << std::endl;
-    exit(-1);
+    throw std::runtime_error("nodestr_to_ir: unsupported");
   }
 
   return simplest_text_order;
@@ -2114,21 +2263,38 @@ SimplestTextOrder NodestrToIR::GetSimplestTextOrderType(int type_id) {
 SimplestAggFnType NodestrToIR::GetSimplestAggFnType(unsigned int aggfnoid) {
   SimplestAggFnType simplest_agg_fn_type = SimplestAggFnType::InvalidAggType;
   switch (aggfnoid) {
-  case 2145:
-  case 2132:
+  case 2051: case 2131: case 2132: case 2133: case 2134: case 2135:
+  case 2136: case 2138: case 2139: case 2140: case 2141: case 2142:
+  case 2143: case 2144: case 2145: case 2146: case 2245: case 2798:
+  case 3527: case 3565: case 4190: case 5100: case 6374: case 6396:
     simplest_agg_fn_type = SimplestAggFnType::Min;
     break;
-  case 2129:
+  case 2050: case 2115: case 2116: case 2117: case 2118: case 2119:
+  case 2120: case 2122: case 2123: case 2124: case 2125: case 2126:
+  case 2127: case 2128: case 2129: case 2130: case 2244: case 2797:
+  case 3526: case 3564: case 4189: case 5099: case 6373: case 6395:
     simplest_agg_fn_type = SimplestAggFnType::Max;
     break;
-  case 2108:
+  case 2107: case 2108: case 2109: case 2110: case 2111: case 2112:
+  case 2113: case 2114:
     simplest_agg_fn_type = SimplestAggFnType::Sum;
     break;
+  case 2100: case 2101: case 2102: case 2103: case 2104: case 2105:
+  case 2106:
+    simplest_agg_fn_type = SimplestAggFnType::Average;
+    break;
+  case 2147:
+    simplest_agg_fn_type = SimplestAggFnType::Count;
+    break;
+  case 2803:
+    simplest_agg_fn_type = SimplestAggFnType::CountStar;
+    break;
+  case 2712: case 2713: case 2714: case 2715: case 2716: case 2717:
+    simplest_agg_fn_type = SimplestAggFnType::StddevSamp;
+    break;
   default:
-    std::cout << "Doesn't support agg fn type " + std::to_string(aggfnoid) +
-                     " yet!"
-              << std::endl;
-    exit(-1);
+    throw std::runtime_error(
+        "unsupported agg fn oid: " + std::to_string(aggfnoid));
   }
 
   return simplest_agg_fn_type;
@@ -2195,16 +2361,24 @@ std::unique_ptr<AQPNode> NodestrToIR::ParseNodeString() {
     node = ReadScalarArrayOpExpr();
   else if (MATCH("MATERIAL", 8))
     node = ReadMaterial();
+  else if (MATCH("MEMOIZE", 7))
+    node = ReadMemoize();
   else if (MATCH("PLANNEDSTMT", 11))
     node = ReadPlannedStmt();
   else if (MATCH("RTE", 3))
     ReadRangeTblEntry();
+  else if (MATCH("RANGETBLENTRY", 13))
+    ReadRangeTblEntry();
+  else if (MATCH("RTEPERMISSIONINFO", 17))
+    ReadRtePermissionInfo();
   else if (MATCH("ALIAS", 5))
     ReadAlias();
   else {
-    std::cout << "Doesn't support node " + std::string(token) + " yet!"
-              << std::endl;
-    exit(-1);
+#ifndef NDEBUG
+    fprintf(stderr, "[nodestr_to_ir] unsupported node: %.*s\n", length, token);
+#endif
+    throw std::runtime_error(
+        std::string("unsupported node: ") + std::string(token, length));
   }
 
   return node;
@@ -2268,9 +2442,10 @@ void NodestrToIR::PopulateTableNames(AQPStmt *stmt) {
     auto &scan_node = stmt->Cast<SimplestScan>();
     auto table_index = scan_node.GetTableIndex();
 
-    // table_index is 1-based, table_col_names is 0-based
-    if (table_index > 0 && table_index <= table_col_names.size()) {
-      const auto &table_entry = table_col_names[table_index - 1];
+    // table_index may be 0-based (when oid_to_name is used) or 1-based (legacy)
+    unsigned int idx = oid_to_name.empty() ? (table_index - 1) : table_index;
+    if (idx < table_col_names.size()) {
+      const auto &table_entry = table_col_names[idx];
       if (!table_entry.empty()) {
         std::string table_name = table_entry.begin()->first;
         scan_node.SetTableName(table_name);
@@ -2294,14 +2469,14 @@ void NodestrToIR::PopulateColumnName(SimplestAttr *attr) {
   auto table_index = attr->GetTableIndex();
   auto column_index = attr->GetColumnIndex();
 
-  // table_index is 1-based, table_col_names is 0-based
-  // column_index is 1-based for varoattno
-  if (table_index > 0 && table_index <= table_col_names.size()) {
-    const auto &table_entry = table_col_names[table_index - 1];
+  unsigned int tidx = oid_to_name.empty() ? (table_index - 1) : table_index;
+  unsigned int cidx = oid_to_name.empty() ? (column_index - 1) : column_index;
+  if (tidx < table_col_names.size()) {
+    const auto &table_entry = table_col_names[tidx];
     if (!table_entry.empty()) {
       const auto &col_names = table_entry.begin()->second;
-      if (column_index > 0 && column_index <= col_names.size()) {
-        std::string col_name = col_names[column_index - 1]->GetLiteralValue();
+      if (cidx < col_names.size()) {
+        std::string col_name = col_names[cidx]->GetLiteralValue();
         attr->SetColumnName(col_name);
       }
     }
