@@ -444,6 +444,32 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
 
     // Process target_list if present (for SELECT clause with aggregates)
     if (!agg_op.target_list.empty()) {
+      // Build per-target agg function mapping: consume agg_fns in order,
+      // matching by (table_index, column_index). This correctly handles
+      // multiple agg functions on the same column (e.g., avg(x) and sum(x)).
+      std::vector<std::string> target_agg_fn(agg_op.target_list.size());
+      {
+        size_t agg_idx = 0;
+        for (size_t ti = 0; ti < agg_op.target_list.size(); ti++) {
+          auto &t = agg_op.target_list[ti];
+          if (ti < agg_op.expr_target_list.size() &&
+              agg_op.expr_target_list[ti])
+            continue;
+          for (size_t ai = agg_idx; ai < agg_op.agg_fns.size(); ai++) {
+            auto &fn = agg_op.agg_fns[ai];
+            if (fn.second == SimplestAggFnType::CountStar)
+              continue;
+            if (fn.first &&
+                fn.first->GetTableIndex() == t->GetTableIndex() &&
+                fn.first->GetColumnIndex() == t->GetColumnIndex()) {
+              target_agg_fn[ti] = TranslateSimplestAggFnType(fn.second);
+              agg_idx = ai + 1;
+              break;
+            }
+          }
+        }
+      }
+
       for (size_t idx = 0; idx < agg_op.target_list.size(); idx++) {
         if (idx < agg_op.expr_target_list.size() &&
             agg_op.expr_target_list[idx]) {
@@ -460,17 +486,13 @@ void IRToSQLConverter::GenerateSQL(AQPStmt &op) {
 
         std::string table_name = table_names[target_table_index];
         std::string actual_col_name = target->GetColumnName();
-        unsigned int col_index = target->GetColumnIndex();
 
         std::string select_str = table_name + "_" +
                                  std::to_string(target_table_index) + "." +
                                  actual_col_name;
 
-        // Check if this column has an aggregate function
-        auto agg_key = agg_field_key(target_table_index, col_index);
-        auto agg_it = agg_field.find(agg_key);
-        if (agg_it != agg_field.end()) {
-          select_str = agg_it->second + "(" + select_str + ")";
+        if (!target_agg_fn[idx].empty()) {
+          select_str = target_agg_fn[idx] + "(" + select_str + ")";
         }
 
         select_field.emplace_back(select_str);

@@ -60,6 +60,22 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node,
   // Build IR tree
   std::unique_ptr<AQPStmt> result_tree;
 
+  // Save column names + aliases for ORDER BY resolution (target_list is moved later)
+  std::vector<std::string> target_col_names;
+  std::vector<std::string> target_aliases;
+  target_col_names.reserve(target_list.size());
+  target_aliases.reserve(target_list.size());
+  for (const auto &t : target_list)
+    target_col_names.push_back(t->GetColumnName());
+  if (select_node.contains("targetList")) {
+    for (const auto &rt : select_node["targetList"]) {
+      if (rt.contains("ResTarget") && rt["ResTarget"].contains("name"))
+        target_aliases.push_back(rt["ResTarget"]["name"].get<std::string>());
+      else
+        target_aliases.push_back("");
+    }
+  }
+
   if (from_tree) {
     result_tree = std::move(from_tree);
     // Check if we have join conditions that need to be applied
@@ -252,17 +268,23 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node,
         else if (dir == "SORTBY_DESC")
           ot = SimplestOrderType::Descending;
       }
+      // Helper: find ORDER BY column position in target list by name or alias
+      auto find_target_pos = [&](const std::string &name) -> unsigned int {
+        for (size_t ti = 0; ti < target_col_names.size(); ti++) {
+          if (target_col_names[ti] == name)
+            return static_cast<unsigned int>(ti);
+        }
+        for (size_t ti = 0; ti < target_aliases.size(); ti++) {
+          if (!target_aliases[ti].empty() && target_aliases[ti] == name)
+            return static_cast<unsigned int>(ti);
+        }
+        return 0;
+      };
+
       std::unique_ptr<SimplestAttr> attr;
       if (sb.contains("node") && sb["node"].contains("ColumnRef")) {
         auto resolved = ConvertColumnRef(sb["node"]["ColumnRef"]);
-        unsigned int target_pos = 0;
-        for (size_t ti = 0; ti < target_list.size(); ti++) {
-          if (target_list[ti]->GetColumnName() ==
-              resolved->GetColumnName()) {
-            target_pos = static_cast<unsigned int>(ti);
-            break;
-          }
-        }
+        unsigned int target_pos = find_target_pos(resolved->GetColumnName());
         attr = std::make_unique<SimplestAttr>(
             resolved->GetType(), resolved->GetTableIndex(), target_pos,
             resolved->GetColumnName());
@@ -270,6 +292,16 @@ ParseTreeToIR::ConvertSelectStmt(const json &select_node,
         int pos = ConvertAConst(sb["node"]["A_Const"])->GetIntValue() - 1;
         attr = std::make_unique<SimplestAttr>(SimplestVarType::IntVar, 0,
                                               pos, "");
+      } else if (sb.contains("node") && sb["node"].contains("FuncCall")) {
+        auto &fc = sb["node"]["FuncCall"];
+        unsigned int target_pos = 0;
+        if (fc.contains("args") && !fc["args"].empty() &&
+            fc["args"][0].contains("ColumnRef")) {
+          auto resolved = ConvertColumnRef(fc["args"][0]["ColumnRef"]);
+          target_pos = find_target_pos(resolved->GetColumnName());
+        }
+        attr = std::make_unique<SimplestAttr>(SimplestVarType::IntVar, 0,
+                                              target_pos, "");
       } else {
         attr = std::make_unique<SimplestAttr>(SimplestVarType::IntVar, 0,
                                               0, "");
