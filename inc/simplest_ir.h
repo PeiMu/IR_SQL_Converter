@@ -1649,6 +1649,7 @@ public:
   ~SimplestChunk() override = default;
 
   unsigned int GetTableIndex() const { return table_index; }
+  void SetTableIndex(unsigned int idx) { table_index = idx; }
 
   std::string GetChunkName() const { return chunk_name; }
   void SetChunkName(std::string name) { chunk_name = name; }

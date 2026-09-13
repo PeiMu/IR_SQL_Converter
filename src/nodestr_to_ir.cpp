@@ -1554,6 +1554,18 @@ std::unique_ptr<AQPExpr> NodestrToIR::ReadScalarArrayOpExpr() {
   (void)token;
 
   if (var_vec[1]->IsConst()) {
+    auto &constVar =
+        static_cast<SimplestConstVar &>(*var_vec[1]);
+    if (constVar.GetType() == SimplestVarType::StringVarArr) {
+      auto strings = constVar.GetStringVecValue();
+      std::vector<std::unique_ptr<SimplestConstVar>> vals;
+      for (auto &s : strings)
+        vals.push_back(std::make_unique<SimplestConstVar>(s));
+      bool negated = (op_type != SimplestExprType::Equal);
+      return std::make_unique<SimplestInExpr>(
+          unique_ptr_cast<SimplestVar, SimplestAttr>(std::move(var_vec[0])),
+          std::move(vals), negated);
+    }
     return std::make_unique<SimplestVarConstComparison>(
         op_type,
         unique_ptr_cast<SimplestVar, SimplestAttr>(std::move(var_vec[0])),
@@ -2522,6 +2534,11 @@ void NodestrToIR::PopulateColumnNamesInExpr(AQPExpr *expr) {
   case SimplestNodeType::SingleAttrExprNode: {
     auto &single_attr_expr = expr->Cast<SimplestSingleAttrExpr>();
     PopulateColumnName(single_attr_expr.attr.get());
+    break;
+  }
+  case SimplestNodeType::InExprNode: {
+    auto &in_expr = expr->Cast<SimplestInExpr>();
+    PopulateColumnName(in_expr.attr.get());
     break;
   }
   default:
