@@ -714,11 +714,14 @@ std::unique_ptr<SimplestAttr> NodestrToIR::ReadAggref() {
   token = PG_strtok(&length);
   (void)token;
   auto args_node = NodeRead(NULL, 0);
-  std::unique_ptr<SimplestAttr> aggr_attr =
-      unique_ptr_cast<AQPNode, SimplestAttr>(std::move(args_node));
-  std::unique_ptr<SimplestAttr> aggr_attr_other =
-      std::make_unique<SimplestAttr>(*aggr_attr);
-  agg_fns.emplace_back(std::make_pair(std::move(aggr_attr_other), agg_fn_type));
+  std::unique_ptr<SimplestAttr> aggr_attr;
+  if (args_node) {
+    aggr_attr = unique_ptr_cast<AQPNode, SimplestAttr>(std::move(args_node));
+    auto aggr_attr_copy = std::make_unique<SimplestAttr>(*aggr_attr);
+    agg_fns.emplace_back(std::move(aggr_attr_copy), agg_fn_type);
+  } else {
+    agg_fns.emplace_back(nullptr, agg_fn_type);
+  }
   // aggorder
   token = PG_strtok(&length);
   (void)token;
